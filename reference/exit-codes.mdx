@@ -1,0 +1,103 @@
+---
+title: "CLI Exit Codes for Scripting and Agent Shell Integration"
+sidebarTitle: "Exit Codes"
+description: "RepoKernel exit codes — 0 for success, 1 for findings, 2 for runtime errors, 3-4 for context budget, 64 for usage errors. Guidance for agent shell disambiguation."
+---
+
+Every `rk` command exits with a numeric code that tells the calling shell or agent whether the run succeeded, whether the project has findings that need attention, or whether something went wrong at the tool or environment level. Understanding the distinction between these codes is essential for writing robust CI scripts and agent loops.
+
+<Note>
+  Exit code `64` follows the `sysexits.h` convention (`EX_USAGE`) from BSD and POSIX systems. This makes it immediately recognizable to shell authors and agent frameworks: when you see `64`, the invocation itself was malformed — fix the CLI arguments, not the project state.
+</Note>
+
+## Exit code table
+
+| Code | Constant | Meaning |
+|---|---|---|
+| `0` | `EXIT_OK` | Clean: no findings at or above the configured severity threshold. |
+| `1` | `EXIT_FINDINGS` / `EXIT_BLOCKED` | Findings at or above threshold, or an expected project-state error (lane already claimed, review pending, epic not found, etc.). |
+| `2` | `EXIT_RUNTIME` | Tool or environment error not attributable to project state — IO failure, internal assertion, unhandled exception, or a missing config file. |
+| `3` | `EXIT_BUDGET_EXCEEDED` | `rk context` payload exceeds the configured budget. Increase the budget or shrink the scope. |
+| `4` | `EXIT_BUDGET_TOO_SMALL` | The budget is smaller than the essential capsule itself. Raise the budget floor. |
+| `64` | `EXIT_USAGE` | Bad command-line invocation: unknown enum value, mutually exclusive flags, malformed numeric option. Follows `sysexits.h`. |
+
+`EXIT_FINDINGS` and `EXIT_BLOCKED` share the value `1`. The intent is the same: something about the current project state needs to be resolved before proceeding, whether that is a validation finding or an operational block such as a lane already being claimed.
+
+## Per-command notes
+
+Different commands use exit codes with slightly different semantics based on what they do.
+
+**`rk validate`**
+- `0` — no findings at or above `policies.severityFailThreshold`
+- `1` — one or more findings at or above threshold
+- `2` — config file missing, unreadable, or IO failure
+
+**`rk next`**
+- `0` — a runnable or planned sprint was found
+- `1` — no runnable sprint (blocked by findings, no queued sprint, or dependencies not met)
+- `2` — runtime error
+
+**`rk review-verdict`**
+- `0` — verdict written successfully
+- `1` — review ID not found or already in a terminal state
+- `2` — runtime error
+
+**`rk epic close`**
+- `0` — epic closed successfully
+- `1` — blocked (sprints not yet shipped, checks failed, or epic already `done`/`cancelled`)
+- `2` — runtime error
+
+**`rk doctor`**
+- `0` — setup is complete
+- `1` — setup is incomplete or config has problems
+
+## Agent shell disambiguation
+
+Agent loops and CI scripts should branch on exit codes in the following order to correctly attribute failures.
+
+```bash
+rk validate --fail-on P0,P1
+EXIT=$?
+
+if [ $EXIT -eq 64 ]; then
+  echo "Fix CLI arguments — bad flag, unknown enum value, or mutually exclusive options"
+elif [ $EXIT -eq 2 ]; then
+  echo "Runtime error — check environment, IO, or config file availability"
+elif [ $EXIT -eq 1 ]; then
+  echo "Project state findings — inspect rk validate output and resolve"
+elif [ $EXIT -eq 3 ]; then
+  echo "Context budget exceeded — increase budget or reduce scope"
+elif [ $EXIT -eq 4 ]; then
+  echo "Budget too small — raise the budget floor"
+else
+  echo "All clear"
+fi
+```
+
+Always branch on `64` first (CLI argument mistakes), then `2` (crashes and environment problems), then `1` (project state that needs work), then `3`/`4` (context budget gates). This ordering prevents a runtime crash (`2`) from being misread as a resolvable findings situation (`1`), and prevents a bad CLI invocation (`64`) from being retried as if it were a transient error.
+
+## Scripting examples
+
+Check for P0-only findings in CI without blocking on P1 hygiene issues:
+
+```bash
+rk validate --fail-on P0
+```
+
+Assert a sprint is runnable before handing off to an agent:
+
+```bash
+rk next --lane main --json
+if [ $? -ne 0 ]; then
+  echo "No runnable sprint — aborting agent dispatch"
+  exit 1
+fi
+```
+
+Use `--json` output to capture the exit code alongside structured data for downstream processing:
+
+```bash
+RESULT=$(rk next --lane main --json)
+EXIT=$?
+SPRINT_ID=$(echo "$RESULT" | jq -r '.id // empty')
+```

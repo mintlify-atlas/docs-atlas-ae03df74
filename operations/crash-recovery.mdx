@@ -1,0 +1,158 @@
+---
+title: "Crash Recovery: Resume Runs After Agent Failures"
+sidebarTitle: "Recovery"
+description: "Diagnose and recover from crashed or runaway agents with rk recover, rk run --resume, and rk doctor without losing work or corrupting your repo."
+---
+
+When an agent crashes mid-sprint or a run is killed unexpectedly, RepoKernel does not leave you with a corrupted repository. A crashed or runaway agent leaves a **resumable run**, not a broken state — the transaction journal under `<git-common-dir>/repokernel/journal/` records every in-flight multi-file operation so `rk recover` can replay, mark complete, or quarantine it safely. Most failures can be healed and resumed without touching sprint files by hand.
+
+<Note>
+Crashes leave operational state (run records, worktrees, journals) in need of repair — they do not corrupt your tracked sprint or registry files. The recovery tools operate on the per-clone state directory, not on your Git history.
+</Note>
+
+## rk recover — audit and repair operational state
+
+`rk recover` audits and repairs operational state under `<git-common-dir>/repokernel/`. It covers four phases: journal replay, worktree cleanup, stale run records, and leaked lane claims.
+
+```bash
+rk recover --preview        # list findings without mutating anything (default)
+rk recover --dry-run        # alias for --preview
+rk recover --apply          # heal everything: replay journals, quarantine, write recover.report.json
+rk recover --journal-only --apply   # skip worktrees, runs, and lane-claim phases
+rk recover --json           # JSON output of findings and planned actions
+```
+
+### Journal classification
+
+When `--apply` is passed, every pending journal entry is classified and handled as follows:
+
+| Classification | Detection | Outcome |
+|---|---|---|
+| `safe_replay` | Schema valid, content hashes match `nextHash`, each uncompleted step's current file matches `prevHash` | Replay incomplete steps, verify `nextHash`, rename `pending → done` |
+| `already_applied` | Schema valid, every uncompleted step's current file already matches `nextHash` | Mark each step complete, rename `pending → done`. No file mutation |
+| `diverged` | Schema valid, but for some step the current file matches neither `prevHash` nor `nextHash` | Quarantine to `.unrecoverable.<ts>.<rand>.json`, surface P1 finding, exit non-zero |
+| `unknown_schema` | JSON parses but `schemaVersion` is outside the supported range | Leave pending (a newer `rk` may know how to replay), surface P1 finding, exit non-zero |
+| `corrupt` | `JSON.parse` throws, schema validation fails, or `step.content` SHA does not match `step.nextHash` | Quarantine, surface P1 finding, exit non-zero |
+
+`rk recover --apply` writes a `recover.report.json` with the full set of actions taken. Unrecoverable journals are kept indefinitely as forensic state; completed journals are garbage-collected keeping the most recent 50.
+
+## Resuming a paused run
+
+Runs pause for several reasons — awaiting review, hitting a `--limit` cap, agent failure, or a merge conflict on a parallel sprint branch. List paused runs and resume them:
+
+```bash
+rk runs                        # list all runs and their status
+rk runs --status paused        # filter to paused runs only
+rk run inspect RUN-001         # show run state and next steps
+rk run logs RUN-001            # show logs for a run
+rk run --resume RUN-001        # resume from the last incomplete sprint
+rk run abort RUN-001           # discard a paused run (sprints keep their current status)
+```
+
+The `--resume` flag looks up the paused run record and picks up from where it stopped. You do not need to re-pass `--agent` or `--limit` — the run record stores those values.
+
+### Halt reasons and how to recover
+
+| Halt reason | What happened | Recovery |
+|---|---|---|
+| `awaiting_review` | Sprint complete; run waiting for a human review verdict | `rk review-verdict R-NNN accepted` then `rk run --resume RUN-NNN` |
+| `awaiting_reviews` | Parallel wave complete; all sprints in the wave need verdicts | Set a verdict for each review, then `rk run --resume RUN-NNN` |
+| `limit_reached` | Run hit the `--limit N` cap | `rk run --resume RUN-NNN` to continue |
+| `agent_failed:<sprint-id>` | Agent returned `failed` or `blocked` | `rk run logs RUN-NNN <sprint-id>`, fix the issue, start a fresh run |
+| `merge_conflict:<sprint-id>` | Parallel sprint branch could not merge cleanly into the epic worktree | Resolve the conflict manually in the epic worktree, then start a fresh run |
+| `epic_completed` | All sprints shipped — epic is done | `rk epic ship E-001` to mark done, validate, and check registry |
+| `no_runnable_sprints` | Nothing eligible to run | `rk next --json` for blocking reasons; fix dependencies or add sprints to the queue |
+
+## rk fix — apply safe mechanical repairs
+
+`rk fix` targets lifecycle-command fragments — partial mutations left by a crash between two sequential file writes. It covers findings like `SHIPPED_SPRINT_IN_QUEUE` and `CANCELLED_SPRINT_IN_QUEUE` that `rk recover` does not address.
+
+```bash
+rk fix --preview        # show what would be fixed
+rk fix --apply --yes    # write all repairs classified as safe
+```
+
+`rk fix --apply` always runs both `live` and `audit` validator scopes, so it repairs historical-hygiene gaps as well as current-state fragments in one pass.
+
+## rk doctor — diagnose setup problems
+
+`rk doctor` runs a comprehensive diagnostic over your RepoKernel installation:
+
+```bash
+rk doctor
+```
+
+It checks config, git setup, paths, queues, registry integrity, the `.gitattributes` merge driver entry, and all three `merge.repokernel-registry.*` git config keys. Missing or drifted entries are reported with exact remediation commands. Exits `1` when setup is incomplete.
+
+## Crash recovery procedure
+
+<Steps>
+  <Step title="Preview what's broken">
+    Run `rk recover --preview` to see all findings without making any changes. This is safe to run at any time and shows you exactly what the apply step will do.
+
+    ```bash
+    rk recover --preview
+    ```
+  </Step>
+  <Step title="Heal operational state">
+    Run `rk recover --apply` to replay safe journal entries, quarantine unrecoverable ones, clean up orphaned worktrees and stale run records, and write `recover.report.json`.
+
+    ```bash
+    rk recover --apply
+    ```
+  </Step>
+  <Step title="Apply lifecycle repairs">
+    If any `SHIPPED_SPRINT_IN_QUEUE` or similar findings are present, apply safe mechanical repairs:
+
+    ```bash
+    rk fix --preview
+    rk fix --apply --yes
+    ```
+  </Step>
+  <Step title="Check what's still blocking">
+    After recovery, inspect remaining blockers before resuming:
+
+    ```bash
+    rk validate --json
+    rk next --json
+    ```
+
+    `rk validate` surfaces any remaining P0/P1 findings that would block the run loop. `rk next --json` shows per-slot blocking reasons when nothing is runnable.
+  </Step>
+  <Step title="Resume or retry">
+    Resume the paused run with `--resume`, or if the sprint itself failed, start a fresh run targeting the next sprint:
+
+    ```bash
+    rk run --resume RUN-001          # resume from last incomplete sprint
+    # or
+    rk run T-NNN --agent claude      # retry a specific sprint
+    ```
+  </Step>
+</Steps>
+
+## Fixing a stuck active sprint
+
+If a run terminated abnormally (crash, manual kill), a sprint may be left in `active` status with no paused run record. To recover:
+
+```bash
+# 1. See what is active
+rk status --json
+rk validate --json
+
+# 2. If the sprint should be reviewed
+rk review S-002
+rk review-verdict R-002 accepted
+rk ship S-002
+
+# 3. Start a new run for the next sprint
+rk run E-001 --agent claude --limit 1
+```
+
+## Registry drift after recovery
+
+After manual lifecycle operations, the registry may be out of sync with disk state. Regenerate it:
+
+```bash
+rk registry --write    # regenerate from disk state
+rk registry --check    # verify integrity
+```

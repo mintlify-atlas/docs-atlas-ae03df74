@@ -1,0 +1,104 @@
+---
+title: "Install the RepoKernel Skill for AI-Driven Workflows"
+sidebarTitle: "Agent Skill"
+description: "Install the RepoKernel skill into Claude Code, Cursor, Windsurf, Copilot, Gemini CLI, or opencode so your AI agent drives rk directly."
+---
+
+The RepoKernel skill is a set of slash commands, hooks, and rules that teach your AI agent the full RepoKernel lifecycle. Instead of guessing the workflow from prose descriptions or fumbling with raw state files, a skill-equipped agent gains seven purpose-built verbs that map directly to `rk` CLI commands — with the right validation gates, stop conditions, tier-to-model routing, and precise rules about when to halt baked in.
+
+## Why the skill matters
+
+Agents that infer project state by reading and writing markdown tables corrupt that state. A language model pattern-matching on `.repokernel/registry.json` will silently overwrite concurrent edits, skip validation invariants, and leave a project in a broken shape no single command can repair.
+
+The skill solves this at the tool-call level. A bundled `PreToolUse` hook intercepts every tool call targeting RepoKernel state paths and denies it, routing the agent through the appropriate `rk` verb instead. The agent never edits `.repokernel/**` directly — the CLI handles all reads, writes, locks, and invariant checks.
+
+<Note>
+  Humans can still hand-edit state files when that's the right call. After a manual edit, run `rk validate` to surface any broken invariants and `rk fix --apply` to re-derive them automatically.
+</Note>
+
+## Install the skill
+
+Run the install command for your agent or IDE. By default, installs go to the user-global rules directory (`~/.cursor/rules/`, `~/.windsurf/rules/`, etc.) so the skill is available in every project.
+
+| Agent / IDE | Command |
+|---|---|
+| Claude Code | `rk install-skill` |
+| Cursor | `rk install-skill --ide cursor` |
+| Windsurf | `rk install-skill --ide windsurf` |
+| GitHub Copilot | `rk install-skill --ide copilot` |
+| Gemini CLI | `rk install-skill --ide gemini` |
+| opencode | `rk install-skill --ide opencode` |
+
+### Project-scoped install
+
+Add `--project` to scope the skill to the current repository instead of your global rules directory:
+
+```bash
+rk install-skill --ide cursor --project
+```
+
+This writes the skill to `.cursor/rules/repokernel.mdc` (or the equivalent path for your IDE), committing it alongside the repo so every team member gets the same rules automatically.
+
+### Preview and force-overwrite
+
+```bash
+rk install-skill --dry-run    # preview files that would be written
+rk install-skill --force      # overwrite a divergent install
+```
+
+## The seven skill verbs
+
+Once the skill is installed, your agent uses these seven verbs to drive the entire RepoKernel lifecycle. Start with `plan`, end with `doctor` only when something drifts — the table is ordered by lifecycle stage.
+
+| Verb | Slash | Does |
+|---|---|---|
+| plan | `/rk-plan` | Scaffold an epic into 1–3 sprints from intent; never auto-executes |
+| status | `/rk-status` | Read-only dashboard: epics, next sprint, P0/P1 count |
+| next | `/rk-next` | Resolve the next runnable sprint with tier-routed cost band |
+| run | `/rk-run` | Execute sprint / epic / fastpath; pause on review or failure |
+| review | `/rk-review` | Spawn parallel review panel; merge findings; record verdict |
+| doctor | `/rk-doctor` | Drift triage; surfaces a fix plan; never auto-applies |
+| reject | `/rk-reject` | Persist an out-of-scope decision |
+
+### What each verb does in depth
+
+**`/rk-plan`** — Confirms scope with the user in one turn, proposes a sprint split (1–3 sprints by default), captures routing intent (`--complexity deep`, `--pin-tier heavy`, `--fanout`), runs `rk validate --fail-on P0,P1` on the result, and prints the epic ID and first runnable sprint. It never auto-runs.
+
+**`/rk-status`** — Calls `rk status --brief --json`, surfaces the active epic progress summary, and optionally runs `rk validate` when the user asks for deeper state. Entirely read-only; no mutations.
+
+**`/rk-next`** — Validates first (routing to `/rk-doctor` on any P0/P1 finding), then calls `rk next --include-planned --json` and `rk route <SPRINT_ID>` to identify the tier and model. It surfaces the sprint ID, title, tier, and suggested model, and asks before starting — no auto-dispatch.
+
+**`/rk-run`** — Resolves the target (free text → fastpath `T-NNN`; hotfix keywords → `rk hotfix`; explicit ID → `rk run <ID>`), runs dry-run and context-budget checks for epics and sprints, streams logs, then branches on outcome: `awaiting_reviews` → suggest `/rk-review`; `completed` → ask to ship; `merge_conflict` / `agent_failed` / `path_violation` → surface diagnostic and offer `--resume` or `rk discard`.
+
+**`/rk-review`** — Picks the cheapest review path (configured panel, small-diff one-shot, or default 4-role parallel panel), compiles context once, spawns reviewers in parallel, aggregates findings into a verdict, asks the user to confirm, then records evidence and verdict. Resumes paused runs after a verdict is recorded.
+
+**`/rk-doctor`** — Checks human gates first (`rk gate ls`), invokes the `rk-doctor` agent for structured diagnosis, surfaces the proposed-action list with `destructive` flags, and applies only what the user approves step by step. Never auto-applies.
+
+**`/rk-reject`** — Records an append-only rejection ADR (regex `pattern`, `reason`, `scope`, optional `ref`) under `.repokernel/rejections.json`. Future intake matches new tickets against these ADRs. Re-running with the same `(pattern, scope)` is idempotent.
+
+## Session hooks
+
+The skill installs three hooks alongside the slash commands:
+
+- **`PreToolUse`** — Blocks direct edits to `.repokernel/**` and routes the agent through the matching `rk` verb. This is what prevents registry corruption.
+- **`SessionStart`** — Injects a one-line dashboard (`rk status --brief`) at the start of every session on a RepoKernel repo, so the agent always knows current state.
+- **`PostToolUse`** — After `rk close`, `rk ship`, `rk epic close`, or `rk epic ship`, surfaces what's now unblocked so the agent can suggest the next step without a round trip.
+
+All hooks exit silently when RepoKernel is not present in the current repo.
+
+## Ceremony helpers
+
+With the skill loaded, the agent prefers high-level ceremony flows over raw command sequences:
+
+- `rk ship <S-NNN>` — sprint review → close → validate → registry, one visible flow
+- `rk gates <S-NNN>` — full gate bundle: `checksCmd`, diff/path checks, validate, registry check
+- `rk plan <E-NNN> --create-sprint --enqueue` — straightforward epic → sprint in one step
+- `rk wave <E-NNN>` — dependency-order preview; add `--apply --enqueue` after user approval
+
+## Example: plain-English agent prompt
+
+With the skill installed, you can direct your agent in plain English:
+
+> _"Check RepoKernel status, run the next sprint, and review when it's done."_
+
+The agent will call `/rk-status` to read the dashboard, `/rk-next` to identify the runnable sprint and its tier, `/rk-run` to execute it, and `/rk-review` to open the review panel — without ever touching a state file directly.

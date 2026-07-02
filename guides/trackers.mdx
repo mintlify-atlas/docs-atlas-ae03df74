@@ -1,0 +1,173 @@
+---
+title: "Tracker Bridge: Linear, Jira, and GitHub Issues Integration"
+sidebarTitle: "Trackers"
+description: "Import issues from Linear, Jira, and GitHub Issues into RepoKernel and write status updates, comments, and PR links back to your tracker."
+---
+
+The RepoKernel tracker bridge connects your issue tracker to the agent workflow without creating lock-in. It has two distinct halves: a read-side that seeds epics and fastpath tasks from tickets at creation time, and a write-side that pushes status updates, comments, and PR links back to the tracker as sprints progress. Both halves use the same `TrackerAdapter` interface — adapters that don't implement an operation return `not_implemented` cleanly so the dispatch layer never fails on a missing capability.
+
+## Supported trackers
+
+| Source | Ref format | Example |
+|---|---|---|
+| GitHub Issues | `gh:owner/repo#NNN` | `gh:acme/web#1631` |
+| JIRA | `jira:KEY-NN` | `jira:PROJ-2293` |
+| Linear | `linear:ABC-NN` | `linear:ABC-12` |
+
+Refs are validated at the CLI boundary — malformed inputs exit with `EXIT_USAGE` (`64`) before any disk write.
+
+## Authentication
+
+| Source | Mechanism | Required setup |
+|---|---|---|
+| `gh` | Shells out to the `gh` CLI; reuses whatever auth `gh` has configured. | `gh auth login` (or `GH_TOKEN`). No raw token handling in `rk`. |
+| `jira` | HTTP Basic with API token. | `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` all required. |
+| `linear` | API key in `Authorization` header. | `LINEAR_API_KEY` required. |
+
+Tokens are never echoed to stdout, stderr, or `--json` output. The GitHub adapter passes only a small allowlist of `gh`-related environment variables to the subprocess, so unrelated secrets do not leak through process env.
+
+```bash
+# GitHub Issues — uses your gh CLI auth
+rk create epic "fallback title" --from-tracker gh:owner/repo#42
+
+# JIRA Cloud
+export JIRA_BASE_URL=https://acme.atlassian.net
+export JIRA_EMAIL=you@acme.com
+export JIRA_API_TOKEN=...   # from https://id.atlassian.com/manage-profile/security/api-tokens
+rk create epic "fallback" --from-tracker jira:PROJ-2293
+
+# Linear
+export LINEAR_API_KEY=lin_api_...   # from https://linear.app/settings/api
+rk create epic "fallback" --from-tracker linear:ABC-12
+```
+
+## Read-side: importing from a tracker
+
+### Run a ticket directly as a fastpath task
+
+The `--from-tracker` flag turns a tracker issue into a fastpath `T-NNN` task. The ticket's title and body become the synthetic task context, and tracker metadata is stored on the generated epic and `T-NNN` alias.
+
+```bash
+# Run a ticket directly as a fastpath task
+rk run --from-tracker gh:owner/repo#42 --agent claude
+
+# With fallback text for when the tracker is unreachable
+rk run -m "Fallback summary" --from-tracker jira:PROJ-2293 --agent claude
+```
+
+The `--agent` flag is required when `--from-tracker` is set. Pass `--agent manual` to import the issue context without immediately dispatching an agent.
+
+### Pull a ticket into a planned epic
+
+```bash
+rk create epic "fallback title" --from-tracker jira:PROJ-2293
+rk create epic "fallback title" --from-tracker gh:owner/repo#42
+rk create epic "fallback title" --from-tracker linear:ABC-12
+```
+
+On a successful fetch, the positional title is replaced with the ticket's title. The bridge pulls title, description, labels, and assignee into `extras.tracker_*` fields on the new epic.
+
+### `tracker_*` fields on epics
+
+```yaml
+extras:
+  external_id: PROJ-2293
+  tracker_source: jira
+  tracker_url: https://acme.atlassian.net/browse/PROJ-2293
+  tracker_labels: [frontend, p1]
+  tracker_assignee: Jane Doe
+```
+
+The `extras` block is RepoKernel's canonical slot for project-specific fields — no schema change was required to support tracker linkage.
+
+### Failure semantics and the fallback flag
+
+By default, any fetch failure — missing credentials, network timeout, HTTP 401/404 — exits `EXIT_RUNTIME` (`2`) without writing state. ID counters only advance on disk write, so a bridge failure never skips `E-NNN` or `T-NNN` slots.
+
+To allow fetch failures to create a plain epic from the fallback title instead:
+
+```bash
+rk create epic "fallback title" --from-tracker jira:PROJ-2293 --allow-tracker-fallback
+rk run -m "fallback task" --from-tracker jira:PROJ-2293 --allow-tracker-fallback
+```
+
+With `--allow-tracker-fallback`, fetch failures create an epic or task from the fallback text with no tracker linkage.
+
+### Content safety
+
+Imported tracker descriptions are normalized before being written: control characters are stripped, body size is capped, and content is placed in a fenced `text` block under an "Imported tracker context" heading so ticket text cannot masquerade as RepoKernel instructions.
+
+## Write-side: pushing updates back to the tracker
+
+Write-side operations are always explicit — ingest never writes back automatically. The write surface lives at the sprint level because the events you want to push (agent finished, PR opened, review accepted, ticket can close) are sprint events.
+
+```bash
+# Link a sprint to a tracker ticket
+rk tracker link S-042 gh:owner/repo#123
+
+# Inspect the linkage
+rk tracker status S-042
+rk tracker status S-042 --json
+
+# Post a comment
+rk tracker comment S-042 "Agent finished — review pending"
+
+# Link a PR to the ticket (native link on gh; comment on Linear/Jira)
+rk tracker link-pr S-042 https://github.com/owner/repo/pull/456
+
+# Transition the ticket (gh: close/reopen; linear/jira: not yet implemented)
+rk tracker transition S-042 closed
+```
+
+The linkage frontmatter shape on the sprint:
+
+```yaml
+extras:
+  tracker:
+    provider: gh
+    issue_id: owner/repo#123
+    issue_url: https://github.com/owner/repo/issues/123
+    sync_at: 2026-05-04T13:30:00.000Z
+    synced_fields: [comment, link_pr]
+```
+
+`stampSync` updates `sync_at` and deduplicates `synced_fields` after every successful write.
+
+### Adapter capability matrix
+
+| Adapter | `link` | `comment` | `link-pr` | `transition` |
+|---|---|---|---|---|
+| `gh` | ✓ | ✓ via `gh issue comment` | ✓ as comment | ✓ via `gh issue close/reopen` |
+| `linear` | ✓ | not yet | not yet | not yet |
+| `jira` | ✓ | not yet | not yet | not yet |
+
+Linear and Jira write APIs ship in a follow-up release. The dispatch layer is already provider-aware — adapters that don't implement an operation return `{ ok: false, reason: 'not_implemented' }` cleanly without failing the call.
+
+### URL validation
+
+Issue URLs are validated at the schema layer. The following schemes are rejected: `javascript:`, `data:`, `vbscript:`, `file:`, `ftp:`.
+
+## Self-hosted JIRA Server / Data Center
+
+The JIRA adapter requires `JIRA_BASE_URL` to be an HTTPS URL without embedded credentials. Private-network hosts (RFC 1918: `10/8`, `192.168/16`, `172.16/12`) are blocked by default to reduce SSRF surface from an attacker-controlled URL. To allow a self-hosted JIRA instance on a private network:
+
+```bash
+export JIRA_ALLOW_PRIVATE_HOSTS=1
+```
+
+Loopback (`127.0.0.1`, `localhost`, `::1`) stays blocked even with this flag — port-forward through a non-loopback hostname instead.
+
+## Anti-patterns
+
+- **Don't put tokens in `repokernel.config.yaml`.** Use environment variables. Config is checked in; env is not.
+- **Don't pass tokens via shell history.** Use a `.envrc` (with `direnv`) or a secrets manager.
+- **Don't rely on `extras.tracker_url` for live ticket state.** It captures the URL at creation time. If the ticket moves or is renamed in the tracker, RepoKernel doesn't know — re-link manually with `rk tracker link` if needed.
+
+## Read-side limitations
+
+- **No polling.** Ingest is one-shot at create time. No daemon, no webhooks.
+- **No sprint-level read-side ingest yet.** Only epic-level. Sprint mapping is on the product backlog.
+- **No retroactive linkage.** Existing epics are not migrated; a `rk migrate add-tracker` command is on the product backlog.
+- **No stored credentials.** Env vars only; never written to a config file or keychain by `rk`.
+
+For the complete end-to-end recipe wiring tracker import, agent run, PR generation, and tracker write-back together, see [PR Bridge](/guides/pr-bridge).

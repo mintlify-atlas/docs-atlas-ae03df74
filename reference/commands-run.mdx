@@ -1,0 +1,156 @@
+---
+title: "Run Orchestrator Commands: rk run, rk runs, rk run inspect"
+sidebarTitle: "Run Commands"
+description: "Reference for the rk run orchestrator — running epics and fastpath tasks, inspecting and resuming runs, and managing the run lifecycle."
+---
+
+The run orchestrator automates the sprint loop for an epic: it queues, starts, hands off to an agent, waits for review, and closes sprints in sequence (or in parallel waves). `rk run` is the primary entry point for both long-running epic automation and one-shot fastpath tasks. The supporting commands — `rk runs`, `rk run inspect`, `rk run logs`, and `rk run abort` — give you visibility into and control over active and historical runs.
+
+---
+
+## `rk run <epic-id>`
+
+Start or resume an automated run loop for an epic.
+
+```bash
+rk run <epic-id> [--agent <name>] [--mode assisted|autonomous]
+                 [--limit N] [--resume RUN-NNN] [--dry-run]
+                 [--parallel] [--sequential] [--concurrency N]
+                 [--lane <name>] [--allow-overlap]
+                 [--worktree] [--cwd <path>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--agent` | `manual` | Agent to invoke: `fake`, `manual`, `claude`, `codex`, `ollama`, or a config-defined name |
+| `--mode` | `assisted` | `assisted` pauses for human review after each sprint; `autonomous` requires `allowAutonomousClose: true` in config |
+| `--limit N` | unlimited | Stop after N sprints complete |
+| `--resume RUN-NNN` | — | Resume a previously paused run by its run id |
+| `--dry-run` | — | Preview the run plan without executing any sprint |
+| `--parallel` | — | Assert parallel execution (the epic must declare `execution_strategy: parallel`) |
+| `--sequential` | — | Force sequential execution even on a parallel epic |
+| `--concurrency N` | config | Maximum sprints per wave during parallel execution |
+| `--lane <name>` | config default | Override the target lane for this run |
+| `--allow-overlap` | — | Allow overlapping `allowed_paths` across parallel sprints (requires `parallel.allowOverlapFlag: true` in config) |
+| `--worktree` | — | Force worktree isolation for sequential runs |
+
+### Fastpath: `rk run -m "..."`
+
+Create a one-shot fastpath task (`T-NNN`) and immediately run it, without creating an epic or sprint manually:
+
+```bash
+rk run -m "Add /health endpoint" --agent claude
+rk run -m "Fix null pointer in parser" --from-tracker gh:owner/repo#42 --agent claude
+```
+
+The `--from-tracker` flag seeds the task title and body from an external issue (`gh:owner/repo#NNN`, `jira:KEY-NN`, `linear:ABC-NN`). The resulting task alias is available via `rk task list` and `rk task status`.
+
+---
+
+## `rk runs`
+
+List all run records for the project, with optional filtering.
+
+```bash
+rk runs [--status running|paused|completed|failed] [--epic <epic-id>] [--json] [--cwd <path>]
+```
+
+| Flag | Description |
+|---|---|
+| `--status` | Filter to runs in a specific state: `running`, `paused`, `completed`, or `failed` |
+| `--epic <epic-id>` | Show only runs associated with the given epic |
+| `--json` | Machine-stable JSON output |
+
+---
+
+## `rk run inspect <run-id>`
+
+Show the full state of a run and its next steps.
+
+```bash
+rk run inspect RUN-001 [--cwd <path>]
+```
+
+Useful for understanding why a run is paused — the output includes the current sprint, the pending review or gate, and the exact command to make progress.
+
+---
+
+## `rk run logs <run-id> [sprint-id]`
+
+Show logs for a run, or for a specific sprint within a run.
+
+```bash
+rk run logs RUN-001
+rk run logs RUN-001 S-002
+```
+
+Scoping to a sprint id is useful for debugging a specific agent invocation without scrolling through the full run history.
+
+---
+
+## `rk run abort <run-id>`
+
+Abort a paused run. Removes the run record. Sprint statuses are **not** changed — any in-progress or paused sprints retain their current state.
+
+```bash
+rk run abort RUN-001 [--cwd <path>]
+```
+
+<Note>
+`rk run abort` only removes the run orchestration record. To roll back work in a sprint, use `rk reopen S-NNN` after aborting.
+</Note>
+
+---
+
+## Fastpath Task Commands
+
+Fastpath tasks are `T-NNN` aliases synthesized by `rk run -m "..."`. Mutation lives in `rk run`, `rk close`, and `rk discard` — there is no `rk task close` alias.
+
+### `rk close T-001`
+
+Review, run checks, and merge the fastpath task to main.
+
+```bash
+rk close T-001
+```
+
+### `rk discard T-001`
+
+Drop a fastpath task without merging.
+
+```bash
+rk discard T-001
+```
+
+### `rk task list`
+
+List every task alias the project has produced, sorted by id.
+
+```bash
+rk task list [--status active|review|shipped|cancelled] [--json] [--cwd <path>]
+```
+
+| Flag | Description |
+|---|---|
+| `--status` | Filter to `active`, `review`, `shipped`, or `cancelled` |
+| `--json` | Emit the raw `TaskAlias[]` array; no envelope wrapper |
+
+### `rk task status <id>`
+
+Show one task's status, sprint linkage, source, created/closed timestamps, and (when present) a truncated `review_sha`.
+
+```bash
+rk task status T-001 [--json] [--cwd <path>]
+```
+
+`--json` emits the raw `TaskAlias` object. Accepts non-padded ids (`T-1` resolves to `T-001`).
+
+### `rk task inspect <id>`
+
+Same fields as `rk task status` plus the resolved on-disk paths to the alias JSON, the synthesized sprint markdown, and (when available) the review markdown.
+
+```bash
+rk task inspect T-001 [--json] [--cwd <path>]
+```
+
+`--json` emits an `{ alias, paths: { alias, sprint, review } }` envelope. When the project graph fails to load, the command still surfaces the alias with a `(not found)` placeholder for the sprint and review paths rather than failing the entire call.

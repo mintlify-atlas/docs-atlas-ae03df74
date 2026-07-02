@@ -1,0 +1,96 @@
+---
+title: "RepoKernel CLI Overview: Commands, Flags, and JSON Output"
+sidebarTitle: "CLI Overview"
+description: "Overview of the rk CLI — global flags, JSON output envelopes, exit codes, and how rk and repokernel are aliases for the same binary."
+---
+
+The RepoKernel CLI ships as a single binary exposed under two names: `rk` (the short form used throughout this documentation) and `repokernel` (the full alias). Both names invoke identical code — choose whichever fits your shell scripts or muscle memory. Every command accepts `--cwd <path>` to run against a repo that is not your current directory, and `--version` / `-v` to print the installed version.
+
+## Global Flags
+
+These flags are available on every command:
+
+| Flag | Description |
+|---|---|
+| `--cwd <path>` | Run as if the working directory is `<path>` instead of the current directory |
+| `--version` / `-v` | Print the installed version and exit |
+
+## JSON Output Envelope
+
+Commands that accept `--json` return a **typed envelope** rather than a bare array. The top-level key matches the entity type, which lets downstream scripts treat the output schema as stable even when new fields are added.
+
+| Command | Top-level key | `jq` accessor |
+|---|---|---|
+| `rk ls epics --json` | `"epics"` | `.epics[]` |
+| `rk ls sprints --json` | `"sprints"` | `.sprints[]` |
+| `rk ls reviews --json` | `"reviews"` | `.reviews[]` |
+| `rk ls lanes --json` | `"lanes"` | `.lanes[]` |
+| `rk validate --json` | `"findings"` | `.findings[]` |
+| `rk registry --json` | root object | `jq '.'` |
+| `rk task list --json` | bare array | `.[]` |
+| `rk task status --json` | root `TaskAlias` | `jq '.'` |
+| `rk task inspect --json` | `{ alias, paths }` | `.alias`, `.paths` |
+
+```bash
+# Example: extract every epic id from JSON output
+rk ls epics --json | jq '.epics[] | .id'
+```
+
+## Exit Codes
+
+RepoKernel uses a small set of distinct exit codes so agent shells and CI pipelines can respond precisely to each outcome. The values are defined verbatim in `packages/cli/src/exitCodes.ts` and cannot drift from this table without breaking the documentation-truth CI test.
+
+| Code | Constant | Meaning |
+|---|---|---|
+| `0` | `EXIT_OK` | Clean: no findings at or above threshold |
+| `1` | `EXIT_FINDINGS` / `EXIT_BLOCKED` | Findings at or above threshold; expected project-state error (lane already claimed, review pending, etc.) |
+| `2` | `EXIT_RUNTIME` | Tool or environment error not attributable to project state (IO failure, internal assertion, unhandled exception) |
+| `3` | `EXIT_BUDGET_EXCEEDED` | `rk context` payload exceeds the configured budget — increase budget or shrink scope |
+| `4` | `EXIT_BUDGET_TOO_SMALL` | Budget is smaller than the essential capsule itself — raise the budget |
+| `64` | `EXIT_USAGE` | Bad command-line invocation (unknown enum value, mutually exclusive flags, malformed numeric option). Follows `sysexits.h` |
+
+### Agent Shell Disambiguation
+
+When writing scripts that need to distinguish between error categories, branch in this order:
+
+1. **`64` first** — fix the CLI arguments before retrying anything else
+2. **`2` next** — transient tool or environment crash; may be safe to retry
+3. **`1` next** — project state needs work (a review verdict, a missing queue slot, etc.)
+4. **`3` / `4` last** — context-budget gates; adjust budget or scope
+
+```bash
+rk run E-001 --agent claude
+EXIT=$?
+if [ $EXIT -eq 64 ]; then
+  echo "Bad CLI invocation — fix arguments"
+elif [ $EXIT -eq 2 ]; then
+  echo "Runtime crash — may retry"
+elif [ $EXIT -eq 1 ]; then
+  echo "Project state blocked — inspect and unblock"
+elif [ $EXIT -eq 3 ] || [ $EXIT -eq 4 ]; then
+  echo "Context budget gate — adjust budget"
+fi
+```
+
+## Command Groups
+
+<CardGroup cols={2}>
+  <Card title="Setup & Init" icon="wrench" href="/reference/commands-setup">
+    `rk init`, `rk doctor`, `rk fix`, `rk recover`, `rk install-skill`, `rk validate`, `rk import`, `rk export`
+  </Card>
+  <Card title="Sprint Lifecycle" icon="arrow-right-arrow-left" href="/reference/commands-lifecycle">
+    `rk start`, `rk close`, `rk ship`, `rk reopen`, `rk rebase-sprint`, `rk epic close`, `rk epic ship`, queue and lane commands, hotfix
+  </Card>
+  <Card title="Run Orchestrator" icon="play" href="/reference/commands-run">
+    `rk run`, `rk runs`, `rk run inspect`, `rk run logs`, `rk run abort`, fastpath task commands
+  </Card>
+  <Card title="Review & Gates" icon="shield-check" href="/reference/commands-review">
+    `rk review`, `rk review-verdict`, `rk review-evidence`, `rk gates`, `rk gate`, `rk reject`
+  </Card>
+  <Card title="Query & Inspect" icon="magnifying-glass" href="/reference/commands-query">
+    `rk status`, `rk next`, `rk report`, `rk ls`, `rk inspect`, `rk explain`, `rk registry`, `rk chain preview`, `rk team status`, `rk plan`, `rk wave`, `rk audit-trail`
+  </Card>
+  <Card title="Configuration" icon="gear" href="/reference/config">
+    `repokernel.config.yaml` — agents, lanes, policies, automation, chaining
+  </Card>
+</CardGroup>

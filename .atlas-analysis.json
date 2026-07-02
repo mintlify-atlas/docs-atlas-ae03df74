@@ -1,0 +1,150 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "RepoKernel",
+  "projectDescription": "A CLI that runs AI coding agents in isolated Git worktrees with scoped paths, dependency ordering, review gates, and merge safety.",
+  "theme": "luma",
+  "primaryColor": "#ce7152",
+  "lightColor": "#764e3f",
+  "darkColor": "#34342c",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "concepts"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/fastpath",
+              "guides/epics-and-sprints",
+              "guides/parallel-waves",
+              "guides/agents",
+              "guides/skill",
+              "guides/ci",
+              "guides/trackers",
+              "guides/pr-bridge"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/team-status",
+              "operations/merge-safety",
+              "operations/crash-recovery",
+              "operations/trust"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "CLI Reference",
+            "pages": [
+              "reference/cli-overview",
+              "reference/commands-setup",
+              "reference/commands-lifecycle",
+              "reference/commands-run",
+              "reference/commands-review",
+              "reference/commands-query"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "reference/config",
+              "reference/validation-codes",
+              "reference/exit-codes"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Isolated Git worktrees per task — agent edits never touch your working tree until review passes",
+    "Dependency-aware sprint queues with atomic claims — parallel agents can't double-dispatch the same sprint",
+    "Scope enforcement via allowed_paths — out-of-scope file edits flagged at review, not after merge",
+    "Review gates with checksCmd — nothing reaches main until checks and verdict pass",
+    "Parallel wave execution — independent sprints run concurrently with path-conflict detection",
+    "Crash recovery — failed or runaway agents leave a resumable run, not a corrupted repo",
+    "Merge-safe registry — custom Git merge driver unions agent state by ID, no conflict markers",
+    "Agent-agnostic — works with Claude, Codex, Ollama, custom shell scripts, or manual mode",
+    "Tracker bridge — import from and write back to Linear, Jira, GitHub Issues",
+    "GitHub Actions integration — rk-validate composite action for PR gating"
+  ],
+  "publicApiSurface": [
+    "rk init",
+    "rk run",
+    "rk close",
+    "rk discard",
+    "rk status",
+    "rk next",
+    "rk validate",
+    "rk doctor",
+    "rk fix",
+    "rk recover",
+    "rk start",
+    "rk review",
+    "rk review-verdict",
+    "rk ship",
+    "rk gates",
+    "rk gate",
+    "rk create epic",
+    "rk create sprint",
+    "rk import",
+    "rk export",
+    "rk plan",
+    "rk wave",
+    "rk epic close",
+    "rk epic ship",
+    "rk queue add",
+    "rk queue remove",
+    "rk queue move",
+    "rk lane ls",
+    "rk lane acquire",
+    "rk lane release",
+    "rk reopen",
+    "rk rebase-sprint",
+    "rk hotfix",
+    "rk fork-hotfix-from",
+    "rk reject",
+    "rk task list",
+    "rk task status",
+    "rk task inspect",
+    "rk runs",
+    "rk run inspect",
+    "rk run logs",
+    "rk run abort",
+    "rk ls",
+    "rk inspect",
+    "rk explain",
+    "rk registry",
+    "rk report",
+    "rk team status",
+    "rk tracker link",
+    "rk tracker comment",
+    "rk tracker link-pr",
+    "rk tracker transition",
+    "rk pr link",
+    "rk pr body",
+    "rk pr sync",
+    "rk pr comment",
+    "rk install-skill",
+    "rk path-policy",
+    "rk chain preview",
+    "rk context",
+    "rk brief",
+    "rk board",
+    "rk blockers",
+    "rk audit-trail"
+  ]
+}

@@ -1,0 +1,177 @@
+---
+title: "Monitor Multi-Agent Fleet Status in Real Time"
+sidebarTitle: "Team Status"
+description: "Use rk team status to see every active run, sprint, registry health, and bottlenecks across all agents in a single terminal snapshot."
+---
+
+`rk team status` is RepoKernel's answer to "what is each agent doing right now?" — a single command that joins runtime data from run files, declared state from the registry, and operational lane state into one coherent snapshot. Instead of grep-ing log files across four terminal tabs, you get runs, sprints, registry health, and current bottlenecks in one place.
+
+## What the dashboard shows
+
+Running `rk team status` produces output like this:
+
+```
+team status — 2026-05-04T13:30:00Z
+
+Runs
+RUN     EPIC      STATUS    ACTIVE  READY  REVIEW  STARTED              ETA
+RUN-005 E-team-core running 3       1      1       2026-05-04 13:00:00  2026-05-04 14:12:00
+RUN-006 E-042     running   1       0      0       2026-05-04 13:25:00  2026-05-04 14:01:00
+
+Sprints
+SPRINT          STATUS  LANE  AGENT  PROGRESS  TITLE
+S-merge-safe    active  core  claude 67%       P0: Merge-Safe State
+S-team          active  core  codex  33%       P1: Team Status Visibility
+
+Registry
+  health=OK  ready_to_merge=true  conflicts=0  files_changed=0
+
+Bottlenecks
+  • S-tracker: awaiting_review
+```
+
+### Runs
+
+Each row in the **Runs** section represents one active run:
+
+| Column | Meaning |
+|---|---|
+| `STATUS` | `running` / `paused` / `completed` / `failed` / `aborted` |
+| `ACTIVE` | Number of sprints currently in flight for this run |
+| `READY` | Sprints in the queue, eligible to dispatch |
+| `REVIEW` | Sprints awaiting a review verdict |
+| `STARTED` | Wall-clock start time |
+| `ETA` | Derived from elapsed time, completed-sprint count, and remaining work |
+
+### Sprints
+
+The **Sprints** section shows a per-sprint snapshot. The `AGENT` column resolves to whichever run owns the active claim. `PROGRESS` is exact when `run.limit` is set, and shows a raw sprint count otherwise.
+
+### Registry health
+
+| Field | Meaning |
+|---|---|
+| `health` | `OK` / `DEGRADED` (P1 findings present) / `BLOCKED` (P0 or threshold-meeting findings) |
+| `ready_to_merge` | `true` only when health is `OK` |
+| `conflicts` | Count of P0 findings (true blockers) |
+| `files_changed` | Count of files carrying findings across P0+P1+P2 — surfaces triage volume |
+
+### Bottlenecks
+
+The **Bottlenecks** section lists conditions that are actively blocking forward progress:
+
+- `S-NNN: awaiting_review` — review verdict outstanding
+- `S-NNN: blocked_by S-MMM` — declared dependency unmet
+- `E-NNN: K concurrent runs (lane saturated)` — multiple runs in flight on the same epic
+
+## Flags
+
+```bash
+rk team status                        # human-friendly dashboard
+rk team status --json                 # machine-readable; pipe into anything
+rk team status --watch                # refresh every 15s minimum, SIGINT-safe
+rk team status --watch --interval 60  # custom refresh interval (seconds)
+rk team status --sprint S-042         # drill into a single sprint
+```
+
+<Tip>
+Use `--watch` during long multi-agent runs for a live refreshing terminal view. The loop clears the screen between iterations and exits cleanly on SIGINT or SIGTERM — no stray listeners left behind.
+</Tip>
+
+### JSON output
+
+`--json` emits a stable, Zod-validated envelope (`TeamStatusSchema` in `@repokernel/core`) suited for dashboards and agent chaining:
+
+```bash
+rk team status --json | jq '.runs[] | {id: .run_id, status: .status, eta: .eta}'
+```
+
+```json
+{
+  "timestamp": "2026-05-04T13:30:00.000Z",
+  "runs": [
+    {
+      "run_id": "RUN-005",
+      "epic_id": "E-team-core",
+      "status": "running",
+      "active_sprints": 3,
+      "states": { "ready": 1, "active": 1, "review": 1, "merging": 0 },
+      "started_at": "2026-05-04T13:00:00.000Z",
+      "ended_at": null,
+      "eta": "2026-05-04T14:12:00.000Z"
+    }
+  ],
+  "sprints": [
+    {
+      "id": "S-merge-safe",
+      "title": "P0: Merge-Safe State",
+      "status": "active",
+      "agent": "claude",
+      "lane": "core",
+      "run_id": "RUN-005",
+      "progress": "67%",
+      "started_at": "2026-05-04T13:00:00.000Z",
+      "eta": "2026-05-04T14:12:00.000Z"
+    }
+  ],
+  "registry": {
+    "files_changed": 0,
+    "conflicts": 0,
+    "ready_to_merge": true,
+    "health": "OK"
+  },
+  "bottlenecks": ["S-tracker: awaiting_review"]
+}
+```
+
+## Project-level views
+
+Beyond `rk team status`, RepoKernel ships several commands for per-entity inspection.
+
+### rk report
+
+`rk report` prints a lean project snapshot directly to your terminal: a headline, the next runnable sprint, sprint groups by status, and active findings.
+
+```bash
+rk report          # headline, next sprint, sprint groups, findings
+rk report --all    # include shipped/done sprints and the full epic table
+rk report --json   # full structured report for machine consumption
+```
+
+### rk board
+
+`rk board` renders a Kanban-style view of all sprints, grouped by status column.
+
+```bash
+rk board
+```
+
+### rk blockers
+
+`rk blockers` lists every sprint blocked by an unmet dependency, along with the dependency that is holding it back.
+
+```bash
+rk blockers
+```
+
+### Per-entity list commands
+
+For focused inspection, use these targeted list commands:
+
+```bash
+rk ls epics           # list all epics
+rk ls sprints         # list all sprints
+rk lane ls            # list lanes and their current state
+```
+
+All list commands accept `--json` for machine-readable output.
+
+## Data sources
+
+The dashboard composes data from three independent sources:
+
+1. **Run files** (live) — the active run records under `<git-common-dir>/repokernel/`
+2. **Registry** (declared state) — `.repokernel/registry.json`, the merged view of all sprint and epic state
+3. **Operational lane state** — per-lane claim and queue files
+
+This means `rk team status` gives you an accurate picture even when multiple agents are running simultaneously on different branches.

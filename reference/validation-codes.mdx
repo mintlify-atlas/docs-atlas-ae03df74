@@ -1,0 +1,163 @@
+---
+title: "Validation Finding Codes: Severity, Meaning, and Fixes"
+sidebarTitle: "Validation Codes"
+description: "Complete list of rk validate finding codes — severity levels P0 through P3, what each means, and how to fix or suppress findings."
+---
+
+Running `rk validate` produces a list of findings — each one has a severity level, a `SCREAMING_SNAKE_CASE` code, a human-readable message, and an optional file reference and suggestion. This page documents every code, what triggers it, and how to resolve it. Use `rk explain <CODE>` at any time to look up a code interactively from the terminal.
+
+## Severity levels
+
+Four severity levels are defined, with P0 being the most critical.
+
+| Level | Meaning |
+|---|---|
+| P0 | State corruption or data loss risk. Requires immediate attention. |
+| P1 | Wrong work, wrong review, or wrong commit. Blocks execution when at or above threshold. |
+| P2 | Stale planning or future collision. Below default threshold but worth addressing. |
+| P3 | Hygiene, formatting, consistency. Informational; does not block by default. |
+
+## Threshold and blocking behavior
+
+`policies.severityFailThreshold` (default `P1`) controls two behaviors:
+
+- **`rk validate` exit code** — exits `1` if any finding is at or above the threshold.
+- **`rk next` global block** — returns `blocked` if any finding at or above the threshold exists anywhere in the project.
+
+Raise the threshold to `P2` or `P3` to surface more findings without blocking `rk next`, or lower it to `P0` to allow `rk next` to proceed despite P1 findings (not recommended for production projects).
+
+## Finding shape
+
+Each finding object has the following structure.
+
+```typescript
+{
+  severity: 'P0' | 'P1' | 'P2' | 'P3'
+  code: string            // SCREAMING_SNAKE_CASE
+  message: string
+  file?: string           // repo-relative path
+  entityType?: 'sprint' | 'epic' | 'review' | 'queue' | 'lane' | 'config'
+  entityId?: string
+  suggestion?: string
+  data?: Record<string, unknown>
+}
+```
+
+Findings are sorted by `(severityRank, code, entityId, file)` for deterministic output. For the same input, validators always produce the same findings in the same order, producing byte-identical canonical JSON.
+
+## Validator scopes
+
+Every validator rule is tagged with one of two scopes.
+
+| Scope | Purpose | Examples |
+|---|---|---|
+| `live` (default) | Invariants on current state that are fixable now. Re-fires on every run. | Broken epic/sprint refs, dependency cycles, queue ordering, missing fields on active sprints |
+| `audit` (opt-in) | Historical hygiene on frozen state. Surfaced on demand to avoid noise on long-lived projects. | Shipped sprints missing `closed_at`, `end_sha`, or review |
+
+Run `rk validate --audit` to widen the validation surface to include audit-scope rules. Day-to-day commands (`rk run`, `rk start`, `rk close`, `rk status`) default to `live` scope. `rk fix` always runs both scopes.
+
+## Finding codes
+
+### P0 — Corruption risk
+
+These findings indicate data integrity problems that must be resolved before any further work can proceed safely.
+
+| Code | Meaning |
+|---|---|
+| `CONFIG_INVALID` | Config YAML parse error or schema violation. Produced when the file is structurally invalid, when a required field is missing, or when an unknown top-level key is present. |
+| `PARSER_FAILURE` | A Markdown entity file is unreadable, has malformed frontmatter, or its schema does not match. |
+| `DUPLICATE_SPRINT_ID` | The same sprint ID appears in more than one file. |
+| `DUPLICATE_EPIC_ID` | The same epic ID appears in more than one file. |
+| `DUPLICATE_REVIEW_ID` | The same review ID appears in more than one file. |
+
+### P1 — Execution correctness
+
+These findings represent incorrect project state — wrong work, wrong review association, wrong commit SHA, or unsatisfied dependencies. They block `rk next` and cause `rk validate` to exit `1` at the default threshold.
+
+| Code | Meaning |
+|---|---|
+| `QUEUE_REFERENCES_MISSING_SPRINT` | A queue slot references a sprint ID that does not exist. |
+| `QUEUE_SLOT_LANE_MISMATCH` | A queue slot references a sprint whose `lane` field differs from the queue's lane. |
+| `EPIC_REFERENCES_MISSING_SPRINT` | An epic's `sprints` array lists a sprint ID that does not exist. |
+| `DEPENDENCY_REFERENCES_MISSING_SPRINT` | A sprint's `depends_on` list references a sprint ID that does not exist. |
+| `DEPENDENCY_CYCLE` | `depends_on` relationships form a cycle (detected via Tarjan SCC). |
+| `QUEUED_DEPENDENCY_NOT_SHIPPED` | A queued sprint has a dependency that is not yet shipped. |
+| `SPRINT_STATUS_NOT_ALLOWED` | A sprint has a canonical status that is disallowed by `policies.allowedStatuses`. |
+| `ACTIVE_SPRINT_MISSING_STARTED_AT` | An active sprint has no `started_at` timestamp. |
+| `ACTIVE_SPRINT_MISSING_BASE_SHA` | An active sprint has no `base_sha`. |
+| `MULTIPLE_ACTIVE_SPRINTS_IN_LANE` | More than one active sprint exists in a lane while `policies.allowMultipleActivePerLane` is `false`. |
+| `SHIPPED_SPRINT_MISSING_CLOSED_AT` | A shipped sprint has no `closed_at` timestamp. |
+| `SHIPPED_SPRINT_MISSING_END_SHA` | A shipped sprint has no `end_sha`. |
+| `SHIPPED_SPRINT_MISSING_REVIEW` | A shipped sprint with `review_required: true` has no accepted review. |
+| `REVIEW_REFERENCES_MISSING_SPRINT` | A review's `sprint_id` field points to a sprint that does not exist. |
+| `SPRINT_REVIEW_ID_MISSING_REVIEW` | A sprint's `review_id` field points to a review that does not exist. |
+| `SPRINT_REVIEW_ID_WRONG_SPRINT` | A sprint's `review_id` points to a review whose `sprint_id` is a different sprint. |
+| `SHIPPED_SPRINT_REVIEW_NOT_ACCEPTED` | A shipped sprint has reviews but none carry `verdict: accepted`. |
+| `REVIEW_BASE_SHA_MISMATCH` | The sprint's `base_sha` differs from its linked review's `base_sha`. |
+| `REVIEW_END_SHA_MISMATCH` | The sprint's `end_sha` differs from its linked review's `end_sha`. |
+| `SPRINT_WITHOUT_EPIC` | A sprint's `epic_id` references an epic that has no matching file. |
+| `SPRINT_IN_MULTIPLE_EPICS` | A sprint ID appears in two or more epics' `sprints` arrays. |
+| `PENDING_SPRINT_IN_QUEUE_AS_RUNNABLE` | A pending sprint is present in a queue slot. Pending sprints are not runnable. |
+| `MULTIPLE_QUEUE_FILES_FOR_LANE` | Two or more queue files declare the same `lane`. |
+
+### P2 — Stale planning
+
+These findings represent outdated or inconsistent planning state. They are below the default `P1` threshold and do not block `rk next` by default.
+
+| Code | Meaning |
+|---|---|
+| `SHIPPED_SPRINT_IN_QUEUE` | A shipped sprint is still listed in a queue. |
+| `CANCELLED_SPRINT_IN_QUEUE` | A cancelled sprint is still listed in a queue. |
+| `ACTIVE_SPRINT_NOT_IN_QUEUE` | An active sprint is not represented in any queue. `rk next` still returns it. |
+| `DUPLICATE_QUEUE_ORDER` | Two slots in the same queue share an `order` value. |
+| `DUPLICATE_QUEUE_SLOT_ID` | Two queue slots share a slot ID. |
+| `DUPLICATE_QUEUE_SPRINT` | The same sprint appears more than once in a single queue lane. |
+| `REGISTRY_DRIFT` | The registry file on disk differs from the regenerated state. Run `rk registry --write` to fix. |
+
+### P3 — Hygiene
+
+These findings cover formatting, naming consistency, and schema cleanliness. They are informational by default.
+
+| Code | Meaning |
+|---|---|
+| `QUEUE_FILE_LANE_MISMATCH` | The queue filename stem differs from the `lane` field inside the file. |
+| `QUEUE_SLOT_ORDER_GAP` | Queue slot `order` values are not contiguous integers starting at `0`. |
+| `UNKNOWN_FRONTMATTER_FIELD` | A frontmatter key is not recognized by the entity schema. |
+| `FILENAME_ID_MISMATCH` | The filename does not contain the entity ID declared in frontmatter. |
+
+## Filtering findings
+
+All filters affect the **displayed** findings only. The exit code always reflects full project health within the active scope.
+
+```bash
+# Override the fail threshold for this run
+rk validate --fail-on P0,P1
+
+# Show only findings at a specific severity
+rk validate --only P1
+
+# Show all findings at or above a minimum severity
+rk validate --min P2
+
+# Filter to a specific finding code
+rk validate --code DEPENDENCY_CYCLE
+
+# Filter to findings for a specific entity
+rk validate --entity S-001
+
+# Open the first finding's file in $EDITOR
+rk validate --open
+
+# Include audit-scope rules (historical hygiene on shipped/frozen state)
+rk validate --audit
+```
+
+## Looking up a code
+
+Use `rk explain` to get full detail on any code — severity, why it matters, expected state, fix guidance, and the related command.
+
+```bash
+rk explain QUEUED_DEPENDENCY_NOT_SHIPPED
+rk explain ACTIVE_SPRINT_MISSING_BASE_SHA
+rk explain DEPENDENCY_CYCLE
+```

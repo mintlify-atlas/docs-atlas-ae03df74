@@ -1,0 +1,228 @@
+---
+title: "Sprint Lifecycle Commands: start, close, ship, reopen"
+sidebarTitle: "Lifecycle Commands"
+description: "Reference for rk start, rk close, rk ship, rk reopen, rk epic close, rk epic ship — the commands that transition sprint and epic state."
+---
+
+Lifecycle commands transition sprints and epics through their state machine: from `planned` through `active`, `review`, and `shipped`, up to a `done` epic. Each command records timestamps and git SHAs so audit trails stay complete. Queue and lane commands manage the ordering and lane-assignment machinery underneath.
+
+---
+
+## `rk start <sprint-id>`
+
+Transition a sprint to `active`. Records `base_sha` (the current `HEAD`) and `started_at`.
+
+```bash
+rk start S-001 [--cwd <path>] [--worktree | --no-worktree]
+```
+
+| Flag | Description |
+|---|---|
+| `--worktree` | Force worktree acquisition for this invocation, overriding config |
+| `--no-worktree` | Skip worktree acquisition for this invocation, overriding config |
+
+### Worktree Modes
+
+Worktree acquisition is governed by `start.worktree` in `repokernel.config.yaml`:
+
+| Mode | Behaviour |
+|---|---|
+| `auto` (default) | Acquire an isolated sprint worktree only when RepoKernel owns the execution environment: not already inside a worktree, and not under an external agent or editor (Cursor, Claude Code, Codex, VS Code) |
+| `always` | Always acquire a worktree, unless already inside one |
+| `never` | Metadata-only; never acquire a worktree |
+
+When a worktree is acquired, the sprint metadata is mutated inside it and the worktree path and branch are printed.
+
+---
+
+## `rk close <sprint-id>`
+
+Close a sprint, transitioning it to `shipped`. Records `end_sha` and `closed_at`. When `review_required: true` is set on the sprint, an accepted review is required before close succeeds.
+
+```bash
+rk close S-001 [--cwd <path>]
+```
+
+The output reports structured phase timings (`precheck`, `checks`, `mutate`, `commit`) so a long unattended close produces attributable boundaries. A baseline-aware warning summary (`N new, M baseline-suppressed`) distinguishes genuinely new P2/P3 findings from those already waived in `warnings-baseline.json`. Both appear under `data.phases` and `data.warning_summary` in `--json` output.
+
+<Note>
+Passing an epic id (`E-NNN`) to `rk close` returns a helpful error directing you to `rk epic close` rather than a generic "sprint not found" message.
+</Note>
+
+---
+
+## `rk ship <sprint-id>`
+
+Run the full sprint ceremony in one visible flow: `rk review` → `rk review-sprint` → accepted verdict check → `rk close` → validation → registry check. Stops at the first failed step.
+
+```bash
+rk ship S-001 [--dry-run] [--skip-checks] [--json] [--cwd <path>]
+```
+
+| Flag | Description |
+|---|---|
+| `--dry-run` | Preview the ship flow without writing any files |
+| `--skip-checks` | Bypass `automation.checksCmd` during the internal `rk close`. Use sparingly and document why. |
+| `--json` | Emit step status and evidence as JSON |
+
+Review, validation, and registry steps are each appended to review `command_evidence` automatically.
+
+---
+
+## `rk reopen <sprint-id>`
+
+Reopen a review, shipped, or active sprint for regression work or re-do. Cancelled sprints are restored to `planned` so they can be queued fresh.
+
+```bash
+rk reopen S-001 [--cwd <path>]
+```
+
+---
+
+## `rk rebase-sprint <sprint-id>`
+
+Realign an active sprint's recorded `base_sha` onto a git ref after out-of-band commits have landed beneath it — for example, a hotfix on another lane. This ensures diff- and scope-based checks compute against the correct starting point.
+
+```bash
+rk rebase-sprint S-001 [--to <ref>] [--json] [--cwd <path>]
+```
+
+| Flag | Description |
+|---|---|
+| `--to <ref>` | Git ref (branch, tag, or SHA) to realign onto. Defaults to `HEAD`. |
+| `--json` | Machine-stable JSON output |
+
+<Warning>
+`rk rebase-sprint` rewrites recorded plan state only — it does **not** run a `git rebase` on any worktree. The sprint must be `active`. A no-op (base already at the ref) exits `0` with `changed: false`.
+</Warning>
+
+---
+
+## `rk epic close <epic-id>`
+
+Close an epic, transitioning it to `done`. Records `closed_at`. All sprints must be `shipped` or `cancelled` unless `--force` is passed.
+
+```bash
+rk epic close E-001 [--dry-run] [--force] [--run-checks] [--checks-cmd <cmd>] [--cwd <path>]
+```
+
+| Flag | Description |
+|---|---|
+| `--dry-run` | Preview the mutation without writing files |
+| `--force` | Close even if some sprints are not yet shipped |
+| `--run-checks` | Run the check command before closing; blocks if it exits non-zero |
+| `--checks-cmd <cmd>` | Override the check command (default: `automation.checksCmd` from config) |
+
+Exits `0` on success, `1` if blocked (sprints not yet shipped, checks failed, or epic already `done`/`cancelled`), `2` on runtime error. Epics in `on_hold` or `planned` can be closed directly.
+
+## `rk epic ship <epic-id>`
+
+Close an eligible epic, then validate and registry-check the project. All sprints must already be `shipped` or `cancelled`. This is the epic-level counterpart to `rk ship S-001`.
+
+```bash
+rk epic ship E-001 [--dry-run] [--run-checks] [--json] [--cwd <path>]
+```
+
+Use `rk epic ship` after the last sprint in an epic ships. It combines `rk epic close` with a post-close validation and registry check in one command.
+
+---
+
+## Queue Commands
+
+Queue commands manage the ordered list of sprints waiting to run on a lane. `planned` and `reopened` sprints become `queued` when added; `pending` requires `--force`.
+
+### `rk queue add`
+
+```bash
+rk queue add S-001 --lane main [--force] [--json] [--cwd <path>]
+```
+
+### `rk queue remove`
+
+Remove a sprint from a lane queue. `queued` sprints return to `planned`; terminal queue cleanup leaves sprint status unchanged. Active sprints cannot be removed directly.
+
+```bash
+rk queue remove S-001 --lane main [--json] [--cwd <path>]
+```
+
+### `rk queue move`
+
+Relocate a sprint between lane queues in a single journaled operation, preserving its `queued` status. This is the supported recovery path for a sprint stuck behind a busy lane — unlike `remove` + `add`, it avoids the `queued → planned → queued` churn.
+
+```bash
+rk queue move S-001 --from main --to ui [--force] [--json] [--cwd <path>]
+```
+
+| Flag | Description |
+|---|---|
+| `--from <name>` | Source lane (required) |
+| `--to <name>` | Target lane (required) |
+| `--force` | Allow moving a `pending` sprint |
+| `--json` | Machine-stable JSON output, including a `next` command hint (`rk start <id>`) |
+
+`rk queue move` appends to the target queue before removing from the source, so an interrupted move fails safe toward a recoverable duplicate (which `rk validate` flags) rather than losing the slot from both lanes. `rk recover` completes a half-applied move forward. Active sprints cannot be moved.
+
+---
+
+## Lane Commands
+
+Lane commands manage worktree acquisition and lane-lock lifecycle for manual use outside of an automated `rk run`.
+
+### `rk lane ls`
+
+List all lanes with health, lock state, queue depth, active sprint, and next sprint.
+
+```bash
+rk lane ls [--json] [--cwd <path>]
+rk lanes   [--json] [--cwd <path>]    # alias
+```
+
+### `rk lane acquire`
+
+Create a worktree and claim the lane lock for manual use.
+
+```bash
+rk lane acquire <epic-id> [--force] [--cwd <path>]
+```
+
+### `rk lane release`
+
+Delete the worktree and release the lane lock.
+
+```bash
+rk lane release <epic-id> [--force] [--cwd <path>]
+```
+
+`--force` discards uncommitted changes in the worktree.
+
+---
+
+## Hotfix Commands
+
+Hotfix commands record out-of-band fixes as fastpath tasks (`T-NNN`) without a full planning cycle.
+
+### `rk hotfix`
+
+Record a fix as a fastpath task with a backing review-skipping sprint. Reference the `T-NNN` id in your commit, then `rk close T-NNN`.
+
+```bash
+rk hotfix "patch broken auth" [--lane <name|auto>] [--allow <glob>] [--deny <glob>] [--ac <criterion>] [--json]
+```
+
+| Flag | Description |
+|---|---|
+| `--lane <name\|auto>` | Lane placement. Omitted → `policies.defaultLane`. `auto` → first free lane, else the default lane (with a note). Any other value → that named lane. |
+| `--allow <glob>` | Allowed path glob (repeatable). Scopes the hotfix. Without any `--allow` flags the hotfix is **unscoped** and the command warns. |
+| `--deny <glob>` | Denied path glob (repeatable) |
+| `--ac <criterion>` | Acceptance criterion (repeatable) |
+| `--json` | Machine-stable JSON output with `lane`, `laneFellBackToDefault`, `unscoped` |
+
+### `rk fork-hotfix-from`
+
+Spin a review-skipping hotfix off an **active** sprint without disturbing it. Common in test and E2E epics when a bug needs product code the parent sprint is not scoped for.
+
+```bash
+rk fork-hotfix-from S-001 "bug description" [--allow <glob>] [--deny <glob>] [--ac <criterion>] [--json]
+```
+
+The hotfix lands on a free lane (so it never contends with the parent sprint), inherits the parent's `allowed_paths` (overridable with `--allow`), and records `forked_from` / `parent_base_sha`. The command prints the exact follow-up: close the hotfix, then `rk rebase-sprint <parent> --to HEAD`. It does not block, resume, or otherwise mutate the parent sprint. `--json` emits the standard envelope with `next_actions`.

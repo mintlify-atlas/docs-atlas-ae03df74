@@ -1,0 +1,206 @@
+---
+title: "Trust Policy: Control Which Agents Can Run Commands"
+sidebarTitle: "Trust"
+description: "Configure RepoKernel trust policies to control which agents can execute which commands, with allow/deny rules for spawn policy enforcement."
+---
+
+RepoKernel separates repo-authored configuration from the user's machine. A `repokernel.config.yaml`, an epic frontmatter file, or a panel reviewer declaration ships with the repo — but none of those things can execute commands on your machine, request environment-variable passthrough, or invoke a reviewer binary without an explicit grant in your user-local trust file. The default is closed: a repo declares what it wants, and you decide what it gets.
+
+## The trust file
+
+`~/.repokernel/trust.yaml` is the single grant authority. It is YAML with a strict shape:
+
+```yaml
+version: 1
+repos:
+  /Users/you/projects/myrepo:        # canonical realpath of the repo
+    checks_cmd: true                 # allow automation.checksCmd to run
+    env_passthrough:                 # env names the repo's agents may inherit
+      - OPENAI_API_KEY
+      - ANTHROPIC_API_KEY
+    agents:                          # agent names the repo may invoke
+      - agent-runner
+      - codex-reviewer
+    reviewers:                       # panel reviewer command bindings
+      critique-bot:
+        command: /Users/you/.local/bin/critique
+        args: ["--mode", "strict"]
+        env_passthrough: ["OPENAI_API_KEY"]
+        timeout_seconds: 300
+```
+
+Key defaults and constraints:
+
+- `version` must be `1`. Future versions raise `TRUST_FILE_VERSION_UNSUPPORTED` — upgrade `rk` before opting in.
+- File path is overridable via `REPOKERNEL_TRUST_FILE` — useful for CI environments.
+- File size is capped at 256 KiB. YAML is parsed with `{ strict: true, maxAliasCount: 100 }` so duplicate keys and alias bombs are rejected at parse time.
+- Reserved keys (`__proto__`, `constructor`, `prototype`) are rejected as defense-in-depth.
+- Env var names in `env_passthrough` must match `[A-Z_][A-Z0-9_]*` — wildcards are not allowed in trust grants.
+
+## What needs a grant
+
+A repo declares a privileged action; `rk` gates it at runtime against your trust file:
+
+| Repo-authored field | Trust scope | Grant in YAML |
+|---|---|---|
+| `automation.checksCmd: "pnpm test"` | `checks_cmd` | `checks_cmd: true` |
+| `agents: { agent-runner: { ... } }` | `agent` | `agents: ["agent-runner"]` |
+| Same agent's `envPassthrough: ["X"]` | `env_passthrough` | `env_passthrough: ["X"]` |
+| Epic `quality_rules.panel_review.reviewers.<id>` | `reviewer` | `reviewers: { <id>: { command, args, ... } }` |
+
+Reviewer commands live in the user-local trust file, **not in the repo**. The repo declares the reviewer by id only; you control which executable that id binds to. A repo cannot unilaterally introduce a new reviewer binary on your machine.
+
+### Checks-command fingerprinting
+
+The trust grant for `checks_cmd` pins a SHA-256 fingerprint of the exact command string(s) at grant time. If the repo's `automation.checksCmd` or any `checksPhases` entry is edited after you granted trust, `rk` requires a re-grant — an agent that rewrites the command into an exfiltration pipeline cannot reuse the old blanket grant.
+
+```bash
+rk trust grant checks_cmd    # review the current command, then grant and pin
+```
+
+## Managing grants from the CLI
+
+### First-run setup for a new repo
+
+```bash
+rk trust audit /path/to/repo            # emit the YAML fragment to stdout — review it
+rk trust audit --apply /path/to/repo    # merge it into ~/.repokernel/trust.yaml
+```
+
+The audit walks `repokernel.config.yaml`, epic frontmatter, and every agent definition. It emits the exact YAML fragment that reproduces current behavior. Reviewer ids that need manual grants are surfaced as a "note" line — the audit deliberately does not auto-bind reviewer commands.
+
+### Check whether grants are missing
+
+```bash
+rk trust check           # exit 0 if clean, exit 1 with a one-line hint
+rk trust check --json    # full evaluation envelope
+```
+
+Run this at session start (e.g. from an editor or agent integration hook) so trust gaps surface before a mid-task failure.
+
+### Grant or revoke a specific scope
+
+```bash
+rk trust grant checks_cmd                     # for the current repo
+rk trust grant agent agent-runner
+rk trust grant env_passthrough OPENAI_API_KEY
+rk trust revoke env_passthrough OPENAI_API_KEY
+```
+
+Reviewer grants are not exposed via `rk trust grant` — they require a `{ command, args, ... }` block and are authored by hand.
+
+### List active grants
+
+```bash
+rk trust list            # human-readable
+rk trust list --json     # full file as JSON
+```
+
+### CI and headless environments
+
+Mount a pre-approved trust file via environment variable:
+
+```bash
+REPOKERNEL_TRUST_FILE=/etc/repokernel/ci-trust.yaml rk gates S-001
+```
+
+The loader prefers `REPOKERNEL_TRUST_FILE` over the default path. Isolating this variable also isolates the reviewer gate signing key (described below).
+
+## Worktree trust inheritance
+
+A grant on the host repo applies to all its worktrees. `rk` reads the worktree's `.git` pointer file (pure filesystem read, no subprocess), resolves the host repo path, and looks up the trust grant. You grant once — every worktree under that repo inherits.
+
+## Reviewer gate signing key
+
+When a reviewer gate runs, it records a signed snapshot on the review file. The signature is an HMAC keyed by a machine-local secret at `~/.repokernel/gate.key` (mode `600`), minted automatically on the first gate run.
+
+- `rk close` verifies the signature against this key. Closing on a machine without the key fails closed with `REVIEWER_GATE_SIGNATURE_INVALID` — re-run the gate on that machine.
+- `rk validate` checks snapshot structure without the key, so CI catches structural tampering even though it cannot verify the signature.
+- The key path is overridable via `REPOKERNEL_GATE_SECRET_FILE`. Isolating `REPOKERNEL_TRUST_FILE` isolates the gate key too.
+
+## Spawn policy
+
+Every child process `rk` spawns — configured checks, agents, panel reviewers, internal `git`/`gh` tooling — routes through a single chokepoint in `packages/cli/src/security/spawnPolicy.ts`.
+
+The full parent `process.env` is **never** inherited by a child. Instead:
+
+- A `DEFAULT_SPAWN_ENV_ALLOWLIST` covers safe non-secret variables: `PATH`, `HOME`, `SHELL`, `TERM`, `TMPDIR`, `CI`, locale variables, and similar.
+- Trust-granted `env_passthrough` names are added on top of the allowlist for agent and reviewer spawns.
+- For `git`/`gh` calls, a `GIT_TOOLING_ENV_ALLOWLIST` (author/committer identity, no tokens) layers on. Tokens (`GH_TOKEN`, `GITHUB_TOKEN`) are forwarded to `gh` only.
+- `GIT_CONFIG_NOSYSTEM=1`, `GIT_OPTIONAL_LOCKS=0`, and `GIT_TERMINAL_PROMPT=0` are forced on every git tooling call, so a hostile repo's system git config or fsmonitor hook cannot leak parent secrets.
+
+### Sensitive environment variable detection
+
+`isSensitiveEnvName(name)` flags names matching well-known secret patterns before trust is evaluated. When a repo declares one of these as `envPassthrough`, the audit output surfaces it with a `# sensitive` annotation so you know exactly what you're approving:
+
+Patterns flagged as sensitive include names ending in `_KEY`, `_TOKEN`, `_SECRET`, `_PASSWORD`, `_PASSPHRASE`, `_DSN`, `_WEBHOOK_URL`, and names starting with `AWS_`, `GITHUB_`, `GH_`, `GOOGLE_`, `GCP_`, `AZURE_`, `STRIPE_`, `OPENAI_`, `ANTHROPIC_`, `HUGGINGFACE_`, `COHERE_`, `MISTRAL_`, `GROQ_`, `REPLICATE_`, `PERPLEXITY_`, `NPM_`, `PYPI_`, `CARGO_`, `DATABASE_`, plus bare `PASSWORD`, `PASSPHRASE`, `TOKEN`, and `SECRET`.
+
+## Error kinds
+
+| Kind | When | What to do |
+|---|---|---|
+| `TRUST_DENIED` | A repo declares a privileged action you haven't granted | `rk trust grant agent <name>` for one agent, or `rk trust audit --apply <repo>` to merge every needed grant |
+| `TRUST_FILE_INVALID` | YAML parse error, schema mismatch, reserved key, or oversized file | Open the file and fix the line named in the message |
+| `TRUST_FILE_UNREADABLE` | Permission denied or not a regular file | Check ownership: should be your user, mode `600` |
+| `TRUST_FILE_VERSION_UNSUPPORTED` | `version` in the file is higher than this `rk` supports | Upgrade `rk`: `npm install -g repokernel@latest` |
+
+Every error kind carries the file path in the message.
+
+## Path policy and the PreToolUse hook
+
+`rk path-policy` classifies any file path in your repo against the set of RepoKernel-managed paths:
+
+```bash
+rk path-policy src/auth/jwt.ts
+# { "kind": "none", "reason": "path is not managed by RepoKernel" }
+
+rk path-policy .repokernel/registry.json
+# { "kind": "registry", "reason": "..." }
+```
+
+Possible `kind` values: `registry`, `run`, `generated`, `epic`, `sprint`, `queue`, `review`, `lane`, `none`.
+
+The bundled `pre-tool-use.sh` hook uses `rk path-policy` to intercept any agent tool call that would write to a RepoKernel-managed file. If the path-policy kind is anything other than `none`, the hook denies the tool call before it executes. This prevents agents from directly editing sprint frontmatter, the registry, run records, or queue files — all writes to those paths must go through `rk` verbs, preserving state integrity and audit trail.
+
+Install the hook for your agent:
+
+```bash
+rk install-skill              # Claude Code (default)
+rk install-skill --ide cursor
+rk install-skill --ide windsurf
+```
+
+With the skill and hook loaded, agents use `rk` commands (`rk start`, `rk ship`, `rk review`) rather than editing `.repokernel/**` directly. You can still hand-edit state files when needed; `rk validate` and `rk fix --apply` re-derive invariants after manual edits.
+
+## rk reject — append-only rejection ADRs
+
+`rk reject` persists an out-of-scope decision as an append-only architectural decision record (ADR), preventing the same request from being re-opened without a visible override.
+
+```bash
+rk reject \
+  --pattern "add OAuth" \
+  --reason "OAuth migration blocked by security review until Q3" \
+  --scope feature
+
+rk reject \
+  --pattern "rewrite parser" \
+  --reason "Parser rewrite not planned — performance meets SLA" \
+  --scope enhancement \
+  --ref gh:owner/repo#99
+```
+
+- `--pattern` is compiled as a JavaScript regex and matched against incoming sprint titles and task descriptions.
+- `--scope` categorizes the rejection (e.g. `feature`, `enhancement`, `refactor`).
+- `--ref` attaches an external reference (issue, PR, or ticket URL).
+- `--close` attempts a tracker comment and close transition on the referenced item.
+- Duplicate `(pattern, scope)` writes are idempotent — re-running the same rejection does not create duplicate ADR entries.
+
+When an agent attempts to plan or run a task whose title matches a rejection pattern, `rk` surfaces the rejection reason before any work is dispatched.
+
+## What the trust model is not
+
+- **Not a sandbox.** A granted command runs as your user, with your full filesystem permissions. The trust model gates what runs, not what it can reach once running.
+- **Not a network firewall.** A granted reviewer binary can make network requests. Use `env_passthrough` discipline to limit which credentials it has access to.
+- **Not isolation for the `rk` process itself.** The trust model gates agents and checks that `rk` spawns; the `rk` process inherits whatever your shell environment has.
+
+For process-level isolation (seccomp, bubblewrap, Firecracker), layer it on top of the trust model — it is a separate concern.

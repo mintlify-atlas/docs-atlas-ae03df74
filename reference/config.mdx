@@ -1,0 +1,254 @@
+---
+title: "repokernel.config.yaml Reference: All Configuration Options"
+sidebarTitle: "Configuration"
+description: "Complete reference for repokernel.config.yaml — paths, policies, git, worktrees, automation, parallel execution, and chaining configuration."
+---
+
+`repokernel.config.yaml` lives at the root of your repository and is the single source of policy truth for every RepoKernel behavior. No project-specific logic lives in framework code — all sprint rules, lane policies, worktree naming, and gate thresholds are driven exclusively from this file. Generate the default layout with `rk init --commit`.
+
+<Note>
+  The schema is strict: **unknown top-level keys produce a `CONFIG_INVALID` (P0) finding** and the CLI exits `1`. If the file is missing or unreadable entirely, validation-style commands exit `2` and `rk doctor` renders setup guidance.
+</Note>
+
+## Top-level required fields
+
+Every `repokernel.config.yaml` must include these four keys at the top level.
+
+| Field | Type | Description |
+|---|---|---|
+| `schemaVersion` | `1` | Must be exactly `1`. Any other value produces a P0 finding. |
+| `projectId` | string | Stable identifier for the project. Used in generated registry metadata. |
+| `projectName` | string | Human-readable project name. |
+| `paths` | object | Directory paths for each entity type. See the `paths` section below. |
+
+## `paths`
+
+All path values must be repo-relative. Absolute paths, `..` segments, and NUL bytes are rejected as `CONFIG_INVALID`. Every key except `decisions` is required.
+
+| Key | Required | Default | Purpose |
+|---|---|---|---|
+| `epics` | yes | `.repokernel/plan/epics` | Directory of epic Markdown files |
+| `sprints` | yes | `.repokernel/plan/sprints` | Directory of sprint Markdown files |
+| `reviews` | yes | `.repokernel/plan/reviews` | Directory of review Markdown files |
+| `queues` | yes | `.repokernel/plan/queues` | Directory of queue lane files |
+| `lanes` | yes | `.repokernel/plan/lanes` | Directory of lane files |
+| `generated` | yes | `.repokernel` | Root directory for generated artifacts |
+| `registry` | yes | `.repokernel/registry.json` | Path where the registry file is written |
+| `decisions` | no | `.repokernel/plan/decisions` | Reserved for future ADR validation |
+
+## `policies`
+
+All fields are optional. Defaults are applied when omitted.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `allowedStatuses` | string[] | all 8 canonical | Sprint statuses considered valid in this project. Unlisted canonical statuses produce `SPRINT_STATUS_NOT_ALLOWED`. |
+| `requireReviewForShipped` | boolean | `true` | Shipped sprints with `review_required: true` must have an accepted review. |
+| `requireBaseShaForActive` | boolean | `true` | Active sprints must have `base_sha`. |
+| `requireEndShaForShipped` | boolean | `true` | Shipped sprints must have `end_sha`. |
+| `allowMultipleActivePerLane` | boolean | `false` | If `false`, multiple active sprints in one lane produce `MULTIPLE_ACTIVE_SPRINTS_IN_LANE`. |
+| `defaultLane` | string | `main` | Lane used by `rk next` and `rk status` when no lane is specified. |
+| `severityFailThreshold` | `P0`\|`P1`\|`P2`\|`P3` | `P1` | Findings at or above this severity block `rk next` and cause `rk validate` to exit `1`. |
+| `skippedSprintIds` | string[] | `[]` | Sprint IDs reserved as deliberate numbering gaps. The allocator skips these when assigning new IDs. |
+| `requireReviewForShippedFromSprintId` | positive int | omitted | Numeric threshold at and above which a review is required to ship, regardless of the `review_required` frontmatter flag. |
+
+## `git`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `requireCleanWorkingTreeForClose` | boolean | `true` | `rk close` refuses dirty worktrees. |
+
+## `worktrees`
+
+Controls how RepoKernel creates and names Git worktrees for epic and sprint isolation.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `root` | string | `../.repokernel-worktrees` | Root directory for managed worktrees. May be absolute or relative to the main checkout. |
+| `branchPrefix` | string | `rk/` | Prefix for managed branches. Epic default: `<prefix>epic/<epic-id>`. Sprint default: `<prefix>sprint/<epic-id>/<sprint-id>`. |
+| `baseBranch` | string | `main` | Branch used as the base when creating a new epic worktree. |
+| `autoAcquire` | boolean | `true` | `rk run` creates or reuses the epic worktree automatically. |
+| `branchPattern` | string | omitted | Compatibility shorthand. Without `{sprintId}` applies to epic branches; with `{sprintId}` applies to sprint branches. |
+| `epicBranchPattern` | string | omitted | Explicit epic branch template. Cannot contain `{sprintId}`. |
+| `sprintBranchPattern` | string | omitted | Explicit sprint branch template. Must contain `{sprintId}`. |
+
+### Branch pattern tokens
+
+| Token | Replaced with | Notes |
+|---|---|---|
+| `{branchPrefix}` | Value of `worktrees.branchPrefix` (default `rk/`) | Verbatim substitution. |
+| `{epicId}` | Epic ID, e.g. `E-001` | Always available. |
+| `{sprintId}` | Sprint ID, e.g. `S-003` | Sprint-level only. `epicBranchPattern` cannot use it; `sprintBranchPattern` must use it. |
+
+The tokens `{ticket}` and `{slug}` are reserved for a future release and are rejected at render time with a `CONFIG_INVALID` error.
+
+Patterns are validated at config load: no whitespace or ASCII control characters, no `..`, `//`, `\\`, `@{`, no leading or trailing `/`, no trailing `.` or `.lock`, and no `~`, `^`, `:`, `?`, `*`, `[`, `]` outside token braces. All `{...}` braces must be matched.
+
+```yaml
+# Explicit separate patterns (recommended for teams)
+worktrees:
+  epicBranchPattern: "feature/epic/{epicId}"
+  sprintBranchPattern: "feature/sprint/{epicId}/{sprintId}"
+# epic branch:   feature/epic/E-001
+# sprint branch: feature/sprint/E-001/S-003
+```
+
+```yaml
+# branchPattern shorthand — no {sprintId} → applies to epic branches only
+worktrees:
+  branchPattern: "feature/{epicId}"
+# epic branch:   feature/E-001
+# sprint branch: rk/sprint/E-001/S-003  (default)
+```
+
+```yaml
+# branchPattern shorthand — with {sprintId} → applies to sprint branches only
+worktrees:
+  branchPattern: "wip/{epicId}/{sprintId}"
+# epic branch:   rk/epic/E-001  (default)
+# sprint branch: wip/E-001/S-003
+```
+
+<Warning>
+  A pattern change mid-project does **not** rename existing branches. New worktree acquisitions use the new pattern; previously created branches remain until renamed manually. Git also cannot store both `feature/E-001` and `feature/E-001/S-001` as branch refs — use distinct namespaces such as `feature/epic/...` and `feature/sprint/...`.
+</Warning>
+
+## `start`
+
+Governs `rk start` worktree acquisition. The `worktrees.*` keys still supply the acquisition mechanics; `worktrees.autoAcquire` still governs `rk run`.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `worktree` | `auto`\|`always`\|`never` | `auto` | When `rk start` acquires an isolated sprint worktree. `auto` acquires only when RepoKernel owns the environment (not already inside a worktree, not under an external agent or editor). `always` acquires unless already inside a worktree. `never` is metadata-only. |
+
+Override per-invocation with `rk start --worktree` or `rk start --no-worktree`.
+
+## `automation`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `allowAutonomousClose` | boolean | `false` | Must be `true` before `rk run --mode autonomous` can close sprints without human review. |
+| `defaultMode` | `assisted`\|`autonomous` | `assisted` | Default automation mode. |
+| `defaultAgent` | string | `manual` | Agent used when `rk run` is invoked without `--agent`. |
+| `defaultReviewer` | string | `agent` | Legacy fallback reviewer name for review stubs. |
+| `reviewer` | string | omitted | Reviewer name written into stubs created by `rk review`, `rk review-create`, `rk review-allocate`, and `rk create review`. Takes precedence over `defaultReviewer` when set. |
+| `checksCmd` | string | omitted | Shell command run by sprint and epic gates. Non-zero exit blocks the flow. Mutually exclusive with `checksPhases`. |
+| `checksPhases` | object | omitted | Phase-by-phase gate commands (`check`, `typecheck`, `build`, `test`) run in order until first failure. Mutually exclusive with `checksCmd`. |
+| `checksTimeoutSeconds` | positive int | `1800` | Wall-clock timeout in seconds for `checksCmd`. On expiry the process receives SIGTERM then SIGKILL. |
+| `binary` | string | omitted | Expected `rk` binary path or PATH-resolvable command. `rk doctor` reports when the running binary does not match. |
+| `reviewers` | object | omitted | Per-reviewer gate configurations, keyed by reviewer name. Each entry carries `model`, `authMode`, `rubricExtras`, and `schemaPath`. |
+
+```yaml
+automation:
+  reviewer: codex
+  defaultReviewer: human
+  checksCmd: pnpm lint && pnpm typecheck && pnpm test
+  allowAutonomousClose: false
+```
+
+## `parallel`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `maxConcurrentSprints` | positive int | `4` | Default upper bound for sprints per parallel wave. |
+| `conflictStrategy` | `block` | `block` | Parallel sprints with overlapping `allowed_paths` are blocked. The only supported value is `block`. |
+| `allowOverlapFlag` | boolean | `false` | Must be `true` before `rk run --allow-overlap` is accepted. |
+| `maxConcurrentSprintsByState` | object | `{}` | Per-state concurrency caps. The effective cap for any sprint is the minimum of `maxConcurrentSprints` and the matching per-state value. |
+
+```yaml
+parallel:
+  maxConcurrentSprints: 6
+  maxConcurrentSprintsByState:
+    review: 1
+    active: 6
+    pending: 2
+  allowOverlapFlag: false
+```
+
+## `chaining`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `false` | Enables chain preview commands. |
+| `maxSprintsPerRun` | positive int | `1` | Default cap for chain-oriented flows. |
+| `requireReviewBetweenSprints` | boolean | `true` | Requires review checkpoints between chained sprints. |
+| `stopOnSeverity` | `P0`\|`P1`\|`P2`\|`P3` | `P1` | Severity at which chaining halts. |
+| `sameEpicOnly` | boolean | `true` | Chain resolution is scoped to the target epic. |
+| `sameLaneOnly` | boolean | `true` | Chain resolution is scoped to the selected lane. |
+
+```yaml
+chaining:
+  enabled: true
+```
+
+## `pathPolicy`
+
+Project-level path-scope escape hatches merged into every sprint's effective policy at gate time. Useful for cross-cutting files (such as a root lockfile) that nearly every sprint touches without being out-of-scope.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `alwaysAllowed` | string[] | `[]` | Repo-relative globs treated as in-scope for every sprint that declares `allowed_paths`. |
+| `alwaysGenerated` | string[] | `[]` | Repo-relative globs treated as generated output for every sprint (e.g. `pnpm-lock.yaml`). |
+
+## `agents`
+
+Define named external agent adapters. Each key under `agents` becomes a valid `--agent` name for `rk run`.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `command` | string | yes | Path to the executable or script. |
+| `args` | string[] | no | Arguments passed to the command. Supports placeholders (see below). |
+| `resultFormat` | string | yes | Must be `sentinel-json`. |
+| `timeoutSeconds` | positive int | no | Seconds before the agent process is killed (default: `1800`). |
+| `envPassthrough` | string[] | no | Extra environment variable names passed through to the agent. By default only a minimal allowlist is passed. |
+
+**Arg placeholders:**
+
+| Placeholder | Value |
+|---|---|
+| `{packet_path}` | Absolute path to the context packet JSON |
+| `{worktree}` | Absolute path to the agent's working directory |
+| `{sprint_id}` | Sprint ID (e.g. `S-001`) |
+| `{run_id}` | Run ID (e.g. `RUN-001`) |
+| `{epic_id}` | Epic ID (e.g. `E-001`) |
+| `{op_root}` | Root of the main checkout |
+| `{registry_path}` | Absolute path to `registry.json` |
+| `{mode}` | `assisted` or `autonomous` |
+
+```yaml
+agents:
+  my-agent:
+    command: ./scripts/run-agent.sh
+    args:
+      - "{packet_path}"
+      - "{worktree}"
+    resultFormat: sentinel-json
+    timeoutSeconds: 1800
+```
+
+## Complete example
+
+The following is a representative `repokernel.config.yaml` covering common configuration options.
+
+```yaml
+schemaVersion: 1
+projectId: my-project
+projectName: My Project
+paths:
+  epics: .repokernel/plan/epics
+  sprints: .repokernel/plan/sprints
+  reviews: .repokernel/plan/reviews
+  queues: .repokernel/plan/queues
+  lanes: .repokernel/plan/lanes
+  generated: .repokernel
+  registry: .repokernel/registry.json
+policies:
+  severityFailThreshold: P1
+  defaultLane: main
+automation:
+  checksCmd: pnpm lint && pnpm typecheck && pnpm test
+worktrees:
+  baseBranch: main
+```
+
+For the full schema with all defaults, see the [Zod schema source](https://github.com/xantorres/repokernel/blob/main/packages/core/src/config/schema.ts).

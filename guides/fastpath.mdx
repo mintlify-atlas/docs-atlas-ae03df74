@@ -1,0 +1,204 @@
+---
+title: "Fastpath: One Task, One Worktree, One Command"
+sidebarTitle: "Fastpath"
+description: "Run a single AI coding task end-to-end with rk run -m. Covers task synthesis, worktree lifecycle, review pause, and close or discard."
+---
+
+The fastpath is the shortest end-to-end flow RepoKernel offers. You describe a task, an agent runs it in an isolated Git worktree, checks execute automatically, and you either merge or discard the result — all without touching epics, sprints, or queues directly. It's the right entry point for quick AI coding tasks and the best way to learn how RepoKernel's lifecycle works before reaching for the deeper machinery.
+
+## The three-command flow
+
+<Steps>
+  <Step title="Run the task">
+    Pass a description with `-m` and pick an agent. Using `--agent fake` runs the deterministic test agent — no API keys, no cloud calls, perfect for trying the flow.
+
+    ```bash
+    rk run -m "Add a README section about RepoKernel" --agent fake
+    ```
+
+    RepoKernel synthesizes a `T-NNN` alias, creates a backing sprint, opens an isolated worktree, runs the agent, then pauses for review once checks pass.
+
+    <Note>
+      `fake` is a deterministic test agent that writes a placeholder file and returns a `completed` sentinel — identical lifecycle to a real agent, with zero external dependencies. Swap `--agent fake` for `--agent claude` or `--agent codex` when you're ready for real coding.
+    </Note>
+  </Step>
+
+  <Step title="Review the diff">
+    When the run enters `review` state you'll see:
+
+    ```
+    Run RUN-001 passed checks. Ready for review.
+      rk close T-001    — merge to main
+      rk discard T-001  — drop
+    ```
+
+    Inspect the changes with your usual Git tools — the worktree branch is a normal Git branch at `.repokernel-worktrees/<repo>/E-NNN`.
+  </Step>
+
+  <Step title="Close or discard">
+    Accept the work and merge:
+
+    ```bash
+    rk close T-001
+    ```
+
+    Or drop it without merging:
+
+    ```bash
+    rk discard T-001
+    ```
+  </Step>
+</Steps>
+
+## What synthesis does
+
+Each call to `rk run -m "..."` kicks off a synthesis step before any agent work begins:
+
+1. Allocates a fresh task id (`T-NNN`) by scanning `.repokernel/tasks/T-*.json` and incrementing the max.
+2. Creates a one-sprint epic with frontmatter derived from your description, acceptance criteria, and path constraints.
+3. Adds the sprint to the default lane queue.
+4. Commits the synthesis as `chore(rk): synthesize task T-NNN` so the working tree is clean before agent work starts.
+
+A task alias file at `.repokernel/tasks/T-NNN.json` records the mapping from the user-visible `T-NNN` to the underlying epic and sprint ids, so you never need to look up `E-NNN` or `S-NNN` yourself.
+
+`rk run` also accepts task descriptions in other forms:
+
+```bash
+rk run                              # opens $EDITOR with a structured template
+rk run -m "Short task description"
+rk run path/to/task.md
+echo "Task description" | rk run --stdin
+```
+
+Task files and stdin may include optional YAML frontmatter to set acceptance criteria and path constraints:
+
+```markdown
+---
+ac:
+  - Returns 200 OK
+allow:
+  - src/api/**
+deny:
+  - src/legacy/**
+---
+Add a /health endpoint.
+```
+
+## What happens during the agent run
+
+After synthesis, RepoKernel:
+
+1. Acquires an isolated Git worktree at `<config.worktrees.root>/<repo>/E-NNN`.
+2. Builds a context packet containing the task description, relevant config, and the list of allowed paths.
+3. Invokes the chosen agent adapter — for example, `claude --print --cwd <worktree> -p <packet_path>`.
+4. Waits for the agent to commit its changes and emit a `REPOKERNEL_RESULT_START` / `REPOKERNEL_RESULT_END` sentinel block.
+5. Runs your configured `checksCmd` inside the worktree once the agent finishes.
+
+Your working tree is untouched throughout. The agent's commits land on an isolated sprint branch such as `rk/sprint/E-001/S-001`.
+
+## Review pause
+
+When the agent finishes and `checksCmd` exits zero, the run transitions to `review` state and pauses. If checks fail, the run is left `active` with the worktree intact:
+
+```bash
+rk run T-001      # retry the agent in the same worktree
+rk discard T-001  # release the worktree and drop the changes
+```
+
+`rk close T-001` refuses to merge until checks pass — failed checks are a hard stop.
+
+### Configuring checks
+
+Set `checksCmd` in `repokernel.config.yaml` once and every run uses it:
+
+```yaml
+automation:
+  checksCmd: pnpm lint && pnpm typecheck && pnpm test
+```
+
+The command runs inside the worktree so it sees the agent's commits, not your working tree.
+
+## `rk close T-001`
+
+Close merges the worktree branch to your current branch and records the run as shipped. It only succeeds when the alias is in `review` state — checks must have passed. The sequence is atomic:
+
+1. Commits any uncommitted RK metadata in the worktree.
+2. Merges the worktree branch with `git merge --no-ff`.
+3. Auto-accepts the review verdict (reaching `review` means checks passed).
+4. Marks the sprint `shipped`, captures `end_sha`, and clears the queue slot.
+5. Releases the worktree.
+6. Updates the alias to `shipped` with `closed_at`.
+
+The resulting Git log is explicit:
+
+```text
+chore(rk): mark T-001 shipped
+chore(rk): close T-001
+chore(rk): auto-accept R-001 for T-001
+merge rk/epic/E-001 (rk fastpath close)
+chore(rk): record review state
+chore(rk): record T-001 review state
+chore(rk): synthesize task T-001
+feat(S-001): fake implementation
+```
+
+If `git merge` produces conflicts, the merge is aborted, your branch stays at its prior HEAD, and the task remains in `review`. Resolve the conflicts manually and retry `rk close T-001`.
+
+## `rk discard T-001`
+
+Cancels the sprint and epic, releases the worktree without merging, and marks the alias `cancelled`. No commits from the worktree branch enter your main branch.
+
+## Managing task aliases
+
+These read-only commands let you inspect any `T-NNN` alias:
+
+```bash
+rk task list                         # all task aliases, sorted by id
+rk task list --status review         # filter by status
+rk task status T-001                 # status, sprint linkage, timestamps
+rk task inspect T-001                # same + on-disk paths to alias, sprint, review files
+```
+
+`--json` is available on all three commands for machine-readable output. `rk task status --json` emits the raw `TaskAlias` object; `rk task inspect --json` emits `{ alias, paths: { alias, sprint, review } }`.
+
+## Running from a tracker issue
+
+Pull a task directly from a GitHub issue, Jira ticket, or Linear item:
+
+```bash
+rk run --from-tracker gh:owner/repo#42 --agent claude
+```
+
+RepoKernel fetches the ticket title and body as synthetic task context and stores tracker metadata on the generated epic and `T-NNN` alias. Provide `-m` as a fallback in case the tracker is unreachable:
+
+```bash
+rk run -m "Fallback task summary" --from-tracker jira:PROJ-2293 --agent claude
+```
+
+Without `--allow-tracker-fallback`, fetch failures exit before any IDs are allocated.
+
+## Files written
+
+After `rk init --commit && rk run -m "..." --agent fake && rk close T-001`, your repo contains:
+
+```
+.repokernel/
+  plan/
+    epics/E-001.md          synthesized
+    sprints/S-001.md        synthesized, status: shipped
+    queues/main.md          slot was added then removed
+    reviews/R-001.md        verdict: accepted
+  tasks/T-001.json          alias mapping (T-001 → E-001 / S-001)
+  registry.json             generated
+```
+
+Plus a merge commit on your current branch with the agent's actual code changes.
+
+## When to graduate from fastpath
+
+The fastpath is intentionally narrow: one task, one worktree, sequential. Reach for the deeper machinery when:
+
+- You want multiple sprints with explicit dependencies → see [Epics & Sprints](/guides/epics-and-sprints)
+- You want sprints to run concurrently → see [Parallel Waves](/guides/parallel-waves)
+- You want explicit `allowed_paths` enforcement per sprint → see sprint frontmatter in [Epics & Sprints](/guides/epics-and-sprints)
+- You want to configure a specific agent adapter → see [Agents](/guides/agents)

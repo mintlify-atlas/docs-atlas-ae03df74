@@ -1,0 +1,250 @@
+---
+title: "RepoKernel Core Concepts: Tasks, Sprints, Epics, and Gates"
+sidebarTitle: "Concepts"
+description: "Learn the RepoKernel entity model — tasks, sprints, epics, queues, lanes, reviews, and gates — the vocabulary you need to use the full system."
+---
+
+RepoKernel organizes work into a small set of entities that map directly onto files in your repository. Once you understand these entities and how they relate to each other, you understand the whole system. There are no hidden services, no remote state — everything is a file you can read, commit, and diff.
+
+<Note>
+All entities are Markdown files with YAML frontmatter. The frontmatter is the contract — RepoKernel reads and writes it. The Markdown body is free-form notes for humans and is ignored by the system.
+</Note>
+
+## Task
+
+A **task** is the top-level unit of agent work created by `rk run -m "..."`. Tasks get a Fastpath alias in the form `T-NNN` (for example, `T-001`) that you use in all follow-up commands: `rk close T-001`, `rk discard T-001`, `rk task status T-001`.
+
+Under the hood, every Fastpath task is backed by a synthesized sprint and epic. The `T-NNN` alias is a convenience layer — it resolves to the underlying sprint, so all sprint-level commands work against the real entity.
+
+```bash
+rk task list                    # list all task aliases
+rk task status T-001            # status, sprint linkage, timestamps
+rk task inspect T-001           # same fields plus on-disk paths
+```
+
+Task aliases are local-only metadata stored in `.repokernel/` and committed with `rk init --commit`. They are not Git objects.
+
+## Sprint
+
+A **sprint** is the atomic unit of work. Each sprint has a single lifecycle and lives in one Markdown file under `.repokernel/plan/sprints/`.
+
+```yaml
+# .repokernel/plan/sprints/S-001-setup-jwt.md
+---
+id: S-001
+title: Set up JWT signing
+epic_id: E-001
+status: queued
+lane: main
+depends_on: []
+review_required: true
+allowed_paths:
+  - src/auth/**
+  - tests/auth/**
+---
+```
+
+### Sprint lifecycle
+
+Every sprint moves through a defined set of states. Transitions are recorded — no state change is silent.
+
+```
+planned → queued → active → review → shipped
+                                   ↘ reopened → active
+                         → cancelled
+```
+
+Each transition captures metadata:
+
+- `queued → active`: records `base_sha` (the current HEAD at start time) and `started_at`
+- `active → review`: validates files changed against `allowed_paths` and `denied_paths`
+- `review → shipped`: records `end_sha` and `closed_at`; requires an accepted review verdict
+
+The `base_sha` is the diff authority. Review diffs are always computed as `base_sha..HEAD` — never date-based — so the scope check is precise regardless of how long the sprint ran.
+
+### Key sprint fields
+
+| Field | Purpose |
+|---|---|
+| `lane` | Which execution track this sprint belongs to |
+| `depends_on` | Sprint IDs that must be `shipped` before this sprint can run |
+| `allowed_paths` | Glob patterns. Required for parallel sprints; validated at review. |
+| `denied_paths` | Any matching file blocks the sprint from closing. |
+| `review_required` | Set to `false` to skip the review check for `shipped` status. |
+
+## Epic
+
+An **epic** is a named collection of sprints representing a feature, initiative, or area of work.
+
+```yaml
+# .repokernel/plan/epics/E-001-auth.md
+---
+id: E-001
+title: Authentication system
+status: active
+sprints:
+  - S-001
+  - S-002
+  - S-003
+---
+```
+
+Epic statuses: `planned`, `active`, `on_hold`, `done`, `cancelled`.
+
+`on_hold` and `cancelled` are set by editing frontmatter directly. `done` is reached via `rk epic ship E-001` (which also validates and registry-checks the project) or the lower-level `rk epic close E-001`. Both transitions record `closed_at`.
+
+An epic can declare `execution_strategy: parallel` to enable wave-based parallel execution, where independent sprints with non-overlapping `allowed_paths` run simultaneously. See the [Parallel Waves guide](/guides/parallel-waves) for fan-out semantics.
+
+Epics created with `--from-tracker` carry an `extras` block linking them to an external ticket in Linear, Jira, or GitHub Issues. The `extras.tracker_*` keys are reserved by RepoKernel.
+
+## Queue and Lane
+
+A **lane** is a named execution track. Lanes let you run independent workstreams in the same repository without collision. Common examples: `main`, `release`, `hotfix`. Each sprint declares its lane in frontmatter. The run loop and `rk next` default to the lane configured in `policies.defaultLane`.
+
+A **queue** defines the execution order for sprints within a lane. One queue file per lane.
+
+```yaml
+# .repokernel/plan/queues/main.md
+---
+lane: main
+slots:
+  - id: Q-001
+    sprint_id: S-001
+    order: 0
+  - id: Q-002
+    sprint_id: S-002
+    order: 1
+---
+```
+
+The resolver walks queue slots in `order` sequence and returns the first sprint whose `depends_on` entries are all `shipped`. Sprints not in the queue cannot be run by the loop. `rk next` surfaces the next runnable sprint; add `--include-planned` to also consider dependency-unblocked planned work that has not yet been queued.
+
+Lanes have concurrency caps configurable in `repokernel.config.yaml`:
+
+```yaml
+parallel:
+  maxConcurrentSprints: 6
+  maxConcurrentSprintsByState:
+    review: 1   # bottleneck — careful
+    active: 6   # main work
+    pending: 2  # cheap; can wait
+```
+
+Lane files are optional — if no lane file exists for a named lane, RepoKernel infers the lane from sprint and queue frontmatter.
+
+## Review
+
+A **review** records the verdict for a sprint after agent execution. It is the paper trail that connects `base_sha` to `end_sha`, preserving a full audit record of what was changed, when, and whether it was accepted.
+
+```yaml
+# .repokernel/plan/reviews/R-001.md
+---
+id: R-001
+sprint_id: S-001
+verdict: pending
+reviewer: agent
+command_evidence: []
+base_sha: abc1234
+created_at: "2026-04-25T14:00:00Z"
+findings: []
+---
+```
+
+Verdict options: `pending`, `accepted`, `changes_requested`, `rejected`.
+
+A sprint cannot close to `shipped` if its review verdict is not `accepted`, unless `review_required: false` is set on the sprint. Set the verdict with:
+
+```bash
+rk review-verdict R-001 accepted
+```
+
+The `command_evidence` field records proof from `rk gates`, `rk ship`, or `rk review-evidence`: focused tests, full gate runs, validation output, and registry status. `rk ship` and `rk gates` record their own evidence automatically.
+
+## Gate
+
+There are two distinct gate concepts in RepoKernel — they sound similar but operate at different layers.
+
+### `rk gate` — human checkpoints
+
+`rk gate` declares named checkpoints that **pause an autonomous run** before a sprint starts. Use them to insert human approval steps into an otherwise unattended pipeline.
+
+```bash
+rk gate add deploy-approval --sprint S-003   # pause before S-003 starts
+rk gate ls                                    # list pending gates
+rk gate resolve deploy-approval               # clear the gate; run resumes
+```
+
+A gate declared on a sprint blocks the run loop from starting that sprint until `rk gate resolve` is called. Gates can only be added to sprints that have not yet started (`planned`, `pending`, or `queued`).
+
+### `rk gates` — the per-sprint check bundle
+
+`rk gates S-001` runs the full gate bundle for a sprint in one pass:
+
+1. `automation.checksCmd` from config (linting, type-checking, tests)
+2. Diff and path checks against `allowed_paths` / `denied_paths`
+3. `rk validate --fail-on P1`
+4. `rk registry --check --explain`
+
+```bash
+rk gates S-001 [--json]
+```
+
+If the sprint has a linked review, `rk gates` automatically appends the results as `command_evidence`. All checks must be green before `rk close` will proceed.
+
+Configure the check command once in `repokernel.config.yaml`:
+
+```yaml
+automation:
+  reviewer: codex
+  checksCmd: pnpm lint && pnpm typecheck && pnpm test
+```
+
+## Registry
+
+The **registry** is a generated, denormalized snapshot of all project state, written to `.repokernel/registry.json`. It is the source of truth for machine consumers — agents, CI pipelines, and dashboard tools — that need fast access to entity state without parsing every Markdown file.
+
+```bash
+rk registry --check    # verify registry matches current plan files
+rk registry --write    # regenerate and write the registry file
+```
+
+`REGISTRY_DRIFT` (severity P2) is raised if the registry is out of sync with the plan files. In CI, run `rk registry --check` after any entity change to catch drift the moment it lands.
+
+The registry is also the target of RepoKernel's **custom Git merge driver**. When two branches both modify `registry.json`, the driver:
+
+- Unions sprints, epics, and reviews by `id` (no conflict markers)
+- Picks the more-progressed status (`shipped > review > active > …`) symmetrically — `mergeRegistries(a, b)` and `mergeRegistries(b, a)` produce the same result
+- Surfaces real conflicts (diverged sprint title, lane, gate) as machine-readable `MergeConflict[]`
+- Re-derives `health.blocked` from the merged finding set so visible state cannot drift
+
+The merge driver is a per-clone configuration installed by `rk init`. It only applies to local merges where the driver is wired — GitHub web merge buttons and similar hosted environments do not execute local merge drivers.
+
+## Findings and severity
+
+Validators produce **findings** with four severity levels:
+
+| Severity | Meaning |
+|---|---|
+| P0 | Critical: corrupt state, duplicate IDs, config invalid |
+| P1 | Blocking: missing required fields, invalid dependencies, review mismatches |
+| P2 | Warning: registry drift, missing optional fields |
+| P3 | Informational: unknown frontmatter fields, filename mismatches |
+
+By default (`policies.severityFailThreshold: P1`), P0 and P1 findings block the run loop and cause `rk validate` to exit with code `1`. Use `rk explain <CODE>` to understand any specific finding code in full detail — severity, why it matters, expected state, fix guidance, and related commands.
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Configuration Reference" icon="sliders" href="/reference/config">
+    Every field in `repokernel.config.yaml` — paths, policies, automation, parallel settings, branch patterns, and worktree behavior.
+  </Card>
+  <Card title="Validation Codes" icon="triangle-exclamation" href="/reference/validation-codes">
+    Full list of P0–P3 finding codes with remediation guidance. Equivalent to `rk explain <CODE>` at the terminal.
+  </Card>
+  <Card title="Epics & Sprints Guide" icon="diagram-project" href="/guides/epics-and-sprints">
+    Model multi-task projects with dependency graphs, path scopes, and the full sprint lifecycle in practice.
+  </Card>
+  <Card title="Parallel Waves" icon="wave-square" href="/guides/parallel-waves">
+    Fan-out semantics for independent sprints, gate composition, and how concurrency caps interact with wave execution.
+  </Card>
+</CardGroup>

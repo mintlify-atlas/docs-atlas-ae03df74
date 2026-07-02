@@ -1,0 +1,92 @@
+---
+title: "RepoKernel: Run AI Agents with Git Safety Rails"
+sidebarTitle: "Introduction"
+description: "RepoKernel orchestrates AI coding agents in isolated Git worktrees with scope enforcement, dependency ordering, and review gates before merge. No daemon, no cloud."
+---
+
+RepoKernel is a CLI tool that makes AI coding agent work **scoped, ordered, reviewed, and resumable**. Every task runs in its own Git worktree, locked to declared paths, sequenced by dependencies, and gated by review before anything touches `main`. It ships no daemon, no database, and no cloud service — your repository is the source of truth, and `git push` is the deployment.
+
+## The problem it solves
+
+Running one AI coding agent is easy. Running three in parallel against the same repository is where things fall apart.
+
+**State conflicts.** Two agents update `registry.json` on different branches. `git merge` produces conflict markers that block until a human fixes them by hand.
+
+**No visibility.** You open four terminal tabs and grep log files to figure out which agent is on which task and what it last touched.
+
+**Double-dispatch.** Both dispatch loops pick up the same sprint. One succeeds; the other discards hours of work — or worse, produces inconsistent output that silently merges.
+
+**Scope creep.** An agent touches files outside its task boundary. You don't notice until the PR review finds unintended changes mixed in with the real work.
+
+RepoKernel fixes each of these at the filesystem layer:
+
+| Problem | What RepoKernel does |
+|---|---|
+| State conflicts | A Git merge driver unions agent state by id instead of leaving conflict markers — order-independent, so no human untangles JSON |
+| No visibility | `rk team status` gives a one-snapshot view of runs, sprints, registry health, and current bottlenecks |
+| Double-dispatch | Atomic per-sprint claims — two dispatch loops cannot both pick up the same sprint |
+| Scope creep | `allowed_paths` in sprint frontmatter, flagged at review time before merge |
+
+<Note>
+RepoKernel has no daemon, no cloud service, and no mandatory tracker. Your repo is the source of truth. If you can `git clone`, you can run RepoKernel.
+</Note>
+
+## The core model
+
+RepoKernel has one small vocabulary. You meet it in this order:
+
+```text
+WHAT TO BUILD          WHEN & WHERE IT RUNS       HOW IT MERGES
+task → sprint → epic  →  queue → lane        →    review → gate
+```
+
+- **Task** — one unit of agent work, run in its own Git worktree. Fastpath tasks get an alias like `T-001`.
+- **Sprint** — a task with declared scope (`allowed_paths`) and dependencies (`depends_on`).
+- **Epic** — a set of sprints aimed at one goal, optionally run in parallel waves.
+- **Queue / Lane** — the ordered backlog `rk next` walks, split into named tracks with their own concurrency caps.
+- **Review** — a recorded verdict; nothing merges without one.
+- **Gate** — your `checksCmd`, scope, and validation checks: all green or no merge.
+
+That's the whole model. Everything else builds on these six concepts.
+
+## Four ways to use RepoKernel
+
+<CardGroup cols={2}>
+  <Card title="Fastpath" icon="bolt" href="/guides/fastpath">
+    **One task, one worktree, done.** The fastest on-ramp: `rk run -m "..."` synthesizes a task, opens an isolated worktree, runs your agent, and pauses for review. No planning required.
+  </Card>
+  <Card title="Agent-operated" icon="robot" href="/guides/agents">
+    **Your agent drives `rk` via the bundled skill.** Install the skill into Claude Code, Cursor, Windsurf, or any supported IDE with `rk install-skill`. The agent learns seven purpose-built verbs and stops guessing lifecycle from prose.
+  </Card>
+  <Card title="Advanced" icon="diagram-project" href="/guides/epics-and-sprints">
+    **Epics, sprints, dependency graphs, parallel waves.** For multi-task projects: declare your epics, wire `depends_on`, set `allowed_paths`, then `rk run E-001 --mode autonomous` fans out across all eligible sprints in order.
+  </Card>
+  <Card title="Multi-agent" icon="users" href="/guides/parallel-waves">
+    **Team status, merge-safe state, tracker and PR bridges.** Scale to a small fleet of 3+ agents in parallel. `rk team status` answers "what is each agent doing?" in one command; the registry merge driver keeps shared state conflict-free.
+  </Card>
+</CardGroup>
+
+## How it differs from agent-native workflows
+
+Coding agents are growing their own orchestration — Claude Code runs parallel subagents, Codex chains tool calls. RepoKernel does not compete with that. It sits one layer down, **around** any agent, enforcing the Git lifecycle regardless of which agent you use.
+
+| The agent decides | RepoKernel enforces |
+|---|---|
+| What to change, how to plan it, when to spawn subagents | Each run lands in an isolated worktree — never your working tree |
+| Which files to touch | `allowed_paths` scope, checked before merge |
+| When the task is "done" | Review gates + your `checksCmd` must pass before anything reaches `main` |
+| — | Deterministic registry merges; atomic claims so two runs never collide |
+| — | State recovery — a crashed or runaway agent leaves a resumable run, not a corrupted repo |
+
+The agent runs subagents. RepoKernel controls the Git lifecycle around them: worktrees, scope, review, merge, and recovery. Bring whichever agent you like.
+
+## When not to use RepoKernel
+
+RepoKernel is deliberate infrastructure. It is overkill for:
+
+- One-off shell scripts or single-file tweaks you will never revisit
+- Throwaway prototypes you never plan to merge into a real codebase
+- Non-Git workflows (no worktree support without Git)
+- Teams that already gate entirely via CI + branch protection and just want raw agent output piped to a PR
+
+If you are writing anything you expect to maintain, run in parallel, or hand off to another agent session, the overhead pays for itself immediately.

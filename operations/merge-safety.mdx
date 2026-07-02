@@ -1,0 +1,151 @@
+---
+title: "Merge-Safe Registry: No Conflict Markers Between Agents"
+sidebarTitle: "Merge Safety"
+description: "RepoKernel's custom Git merge driver unions agent state by ID, picks the most-progressed status, and surfaces real conflicts as structured data."
+---
+
+When two agents on different branches both finish work and commit `.repokernel/registry.json`, a `git merge` without help stops with JSON conflict markers — useless for review, painful to untangle by hand. RepoKernel ships a custom Git merge driver that resolves these conflicts deterministically: union by id, more-progressed status wins, and real divergence surfaces as machine-readable structured data rather than inline markers. Swap the merge order and you get the same byte-identical result.
+
+## The problem without the driver
+
+Without the driver installed, `git merge` treats `registry.json` as a plain text file and produces standard conflict markers whenever two branches touch the same region of the file. In a multi-agent setup where every sprint claim, status update, and review write lands in the registry, collisions are the rule rather than the exception.
+
+## How the merge driver works
+
+When the clone performing the merge has the driver installed, Git invokes `rk registry-merge-driver` with the standard `%A %B %O` substitutions (current branch, other branch, merge base). The driver calls `mergeRegistriesThreeWay(base, current, other)` and writes the merged result back to `%A`. Exit 0 means resolved. Anything else leaves Git's standard conflict markers in place for human triage.
+
+The two-way primitive `mergeRegistries(a, b)` that underpins the driver has three formal guarantees:
+
+- **Idempotent.** `mergeRegistries(r, r).registry === r` (modulo regenerated timestamps).
+- **Commutative.** `mergeRegistries(a, b).registry` is structurally equal to `mergeRegistries(b, a).registry` — merge order does not matter.
+- **Total.** Never throws on schema-valid inputs.
+
+### Resolution rules by field type
+
+| Field type | Strategy |
+|---|---|
+| Sprint / epic / review id arrays (e.g. `depends_on`, `epic.sprints`) | Union, sort, dedupe |
+| Sprint status | `pickFurthestStatus`: `shipped > review > active > queued > reopened > pending > planned`. `cancelled` loses to any non-cancelled side; `shipped` beats `cancelled` |
+| Sprint nullable timestamps (`started_at`, `closed_at`) | Pick the later ISO timestamp |
+| Sprint nullable scalars (`gate`, `review_id`, `base_sha`, `end_sha`) | Non-null wins over null; if both non-null and equal, use that; if both non-null and divergent, surface a `sprint_diverged` conflict and pick lexicographic min |
+| Sprint immutable fields (`title`, `epic_id`, `lane`, `file`) | If equal, use that; if different, surface a `sprint_immutable` conflict and pick lexicographic min |
+| Epic status | `done > cancelled > active > on_hold > planned` symmetrically; `epic_diverged` conflict recorded when divergent |
+| Review verdict | `rejected > changes_requested > accepted > pending` (more conservative wins) |
+| Lane claims | Two non-null divergent claims → `lane_claim` conflict; lexicographic-min winner |
+| Queue slots | Per-lane union by `sprint_id`; on collision pick lower `order`; cross-sprint slot id reuse surfaces a `queue_id_collision` conflict and the loser is renamed deterministically |
+| `findings` | Union, dedupe by `(code, severity, entityId, file, message)` |
+| `health` | Recomputed from merged findings; a stale `blocked: true` paired with empty findings does not poison future merges |
+
+### Conflicts the driver surfaces — not silently resolves
+
+The driver chooses safety over silence. The following are surfaced as `MergeConflict[]` entries and treated as unresolvable without human input:
+
+- Two non-null divergent values for `gate`, `review_id`, `base_sha`, or `end_sha`
+- Diverged `title`, `epic_id`, `lane`, or `file` for the same sprint id
+- Divergent epic status crossing terminal boundaries (e.g. `done` vs. `cancelled`)
+- Two non-null lane claims pointing at different runs
+- Delete-vs-modify on the same sprint, epic, review, lane, or queue slot when the merge base shows the entity existed
+
+In these cases the driver still produces a deterministic byte-identical result (so `git rerere` records once), and lists the conflicts on stderr for human decision.
+
+You can inspect these conflicts directly using the `--json` flag:
+
+```bash
+rk registry-merge-driver --current path/to/A.json --other path/to/B.json --base path/to/O.json --json
+```
+
+```json
+{
+  "ok": false,
+  "conflicts": [
+    {
+      "kind": "sprint_immutable",
+      "id": "S-1",
+      "field": "title",
+      "local": "Original",
+      "remote": "Renamed"
+    }
+  ],
+  "integrityIssues": [],
+  "errors": []
+}
+```
+
+## Setup
+
+`rk init` installs everything automatically — a `.gitattributes` entry plus per-clone git config:
+
+```bash
+rk init --commit
+```
+
+This writes:
+
+```
+# .gitattributes
+.repokernel/registry.json merge=repokernel-registry
+
+# git config (per-clone)
+merge.repokernel-registry.name      RepoKernel registry merge driver
+merge.repokernel-registry.driver    rk registry-merge-driver --current %A --other %B --base %O
+merge.repokernel-registry.recursive binary
+```
+
+The `.gitattributes` entry can be committed with the repo. The three `merge.repokernel-registry.*` git config keys are local to the clone that performs the merge.
+
+<Note>
+Fresh clones of an already-initialized repo must run `rk init` (or `rk doctor`) before the driver is wired. The install is idempotent — re-running it does not duplicate entries or error on existing keys.
+</Note>
+
+### Verifying with rk doctor
+
+`rk doctor` checks that both pieces of the driver wiring are in place:
+
+```bash
+rk doctor
+```
+
+It verifies the `.gitattributes` line and all three `merge.repokernel-registry.*` git config keys. Missing or drifted entries fail the diagnostic with an exact remediation command.
+
+## Hosted-web merge limitations
+
+<Warning>
+GitHub web merges, GitLab UI merges, and other hosted PR merge buttons do **not** execute your local custom merge driver, even when `.gitattributes` is present in the repo. These environments will leave JSON conflict markers exactly as they would without RepoKernel. For deterministic registry merges, always perform the merge locally on a clone with the driver installed, or run `rk validate` in CI immediately after any hosted-web merge to catch registry drift before it propagates.
+</Warning>
+
+## Workflow example
+
+With the driver installed, a typical multi-agent merge looks like this:
+
+1. Agent A commits a sprint on `feature-a` — registry updated.
+2. Agent B commits a different sprint on `feature-b` — registry updated independently.
+3. You run `git merge feature-b` locally on a clone with the driver installed.
+4. The driver unions both sprint sets, picks the more-progressed status for any shared fields, and writes a clean merged registry. No conflict markers.
+
+## Post-merge integrity check
+
+After resolving the merge, the driver runs `checkRegistryIntegrity` to catch orphan-class issues:
+
+| Issue kind | Meaning |
+|---|---|
+| `sprint_missing_epic` | Sprint references an epic that no longer exists |
+| `sprint_missing_dep` | Sprint depends on a non-existent sprint |
+| `sprint_missing_review` | Sprint's `review_id` points at a missing review |
+| `review_missing_sprint` | Review's `sprint_id` points at a missing sprint |
+| `queue_missing_sprint` | Queue slot points at a missing sprint |
+| `epic_missing_sprint` | Epic's `sprints[]` lists a sprint that doesn't exist |
+| `epic_sprints_mismatch` | A sprint claims membership in an epic but the epic's `sprints[]` doesn't list it |
+
+If any integrity check fires, the driver exits non-zero and leaves conflict markers in place for human triage.
+
+## CI validation
+
+For teams using hosted-web merges, add `rk validate` to your CI pipeline to catch any registry drift the moment a PR lands:
+
+```yaml
+- uses: xantorres/repokernel/.github/actions/rk-validate@v1
+  with:
+    fail-on: P0,P1
+```
+
+This runs `rk validate` on every PR, posts a sticky comment with finding counts, emits inline annotations, and uploads JSON findings as an artifact.

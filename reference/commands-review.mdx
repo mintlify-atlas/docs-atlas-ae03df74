@@ -1,0 +1,149 @@
+---
+title: "Review and Gate Commands: rk review, rk gates, rk gate"
+sidebarTitle: "Review Commands"
+description: "Reference for rk review, rk review-verdict, rk review-evidence, rk gates, and rk gate — the commands for recording verdicts and running checks."
+---
+
+Review and gate commands form the quality control layer between sprint work and merge. `rk review` opens a review stub, `rk review-verdict` records a human or automated decision, and `rk review-evidence` appends command output as proof. The `rk gates` command runs the full check bundle for a sprint; `rk gate` manages human checkpoints that pause autonomous runs. `rk reject` records an ADR for work explicitly ruled out.
+
+---
+
+## `rk review <sprint-id>`
+
+Create a review stub and transition the sprint to `review`.
+
+```bash
+rk review S-001 [--cwd <path>]
+```
+
+The generated review stub uses `automation.reviewer` for its `reviewer:` frontmatter value, falling back to `automation.defaultReviewer`. The review file is staged but not committed — the agent or human reviewer modifies it before calling `rk review-verdict`.
+
+---
+
+## `rk review-verdict <review-id> <verdict>`
+
+Set the verdict on a review entity.
+
+```bash
+rk review-verdict R-001 accepted [--summary "..."] [--cwd <path>]
+rk review-verdict R-001 changes_requested
+rk review-verdict R-001 rejected
+```
+
+| Flag | Description |
+|---|---|
+| `--summary "..."` | Optional human-readable summary written to review frontmatter |
+
+### Verdicts
+
+| Value | Meaning |
+|---|---|
+| `accepted` | Work meets acceptance criteria; sprint is eligible for `rk close` |
+| `changes_requested` | Reviewer has requested specific changes before acceptance |
+| `rejected` | Work is declined; sprint should be reopened or cancelled |
+
+`rk review-verdict` writes the verdict to frontmatter and stages the file. It does **not** commit. After setting a verdict, resume the paused orchestrator run with `rk run --resume RUN-NNN`.
+
+Exit `0` on success, `1` if the review id is not found or already terminal, `2` on runtime error.
+
+---
+
+## `rk review-evidence <id>`
+
+Append command evidence to a review. The target may be a review id or a sprint id with a linked review.
+
+```bash
+rk review-evidence S-001 --label focused-tests --command "pnpm test -- filter" [--summary "..."] [--json]
+rk review-evidence R-001 --label full-gates --command "rk gates S-001"
+```
+
+Evidence lands in review frontmatter as `command_evidence[]`. `rk ship` and `rk gates` record their own evidence automatically.
+
+<Note>
+The `--exit-code` flag imports already-run evidence without executing the command — this is for importing external results and does **not** satisfy review gates.
+</Note>
+
+---
+
+## `rk gates <sprint-id>`
+
+Run the repo-configured gate bundle for a sprint. The bundle is repo-agnostic and never hardcodes a package manager.
+
+```bash
+rk gates S-001 [--json] [--cwd <path>]
+```
+
+The gate bundle runs in this order:
+
+1. `automation.checksCmd` (when configured in `repokernel.config.yaml`)
+2. Diff and path checks against `allowed_paths` / `denied_paths`
+3. `rk validate --fail-on P1`
+4. `rk registry --check --explain`
+
+The output prints `allowed_paths` and `denied_paths` before the risky checks so the scope is visible upfront. If the sprint has a linked review, the command appends each check as `command_evidence`.
+
+---
+
+## `rk gate <subcommand>`
+
+Human checkpoints that pause an autonomous run before a specific sprint. Distinct from `rk gates` (the per-sprint check bundle above).
+
+```bash
+rk gate ls [--epic <id>] [--json] [--cwd <path>]
+rk gate add <gate-name> --sprint <S-NNN> [--json] [--cwd <path>]
+rk gate resolve <gate-name> [--epic <id>] [--force] [--dry-run] [--cwd <path>]
+```
+
+### `rk gate ls`
+
+List all declared gates, with optional filtering to an epic.
+
+```bash
+rk gate ls [--epic E-001] [--json] [--cwd <path>]
+```
+
+### `rk gate add`
+
+Declare a named gate on one or more planned, pending, or queued sprints. When the orchestrator reaches a gated sprint it pauses and prints instructions for resolution.
+
+```bash
+rk gate add security-review --sprint S-005 [--json] [--cwd <path>]
+```
+
+`--sprint` is repeatable. A sprint that has already started is rejected.
+
+### `rk gate resolve`
+
+Clear a gate so the paused run can continue.
+
+```bash
+rk gate resolve security-review [--epic E-001] [--force] [--dry-run] [--cwd <path>]
+```
+
+| Flag | Description |
+|---|---|
+| `--epic <id>` | Scope the resolution to gates on a specific epic |
+| `--force` | Resolve even if the gate has not been explicitly satisfied |
+| `--dry-run` | Preview the resolution without writing |
+
+---
+
+## `rk reject`
+
+Record an append-only rejection ADR for work the project has explicitly ruled out. The pattern is compiled as a JavaScript regex and matched against tracker title and body during future intake.
+
+```bash
+rk reject --pattern <regex> --reason <text> --scope feature|bug|enhancement \
+          [--ref <source>:<ref>] [--close] [--json] [--cwd <path>]
+```
+
+| Flag | Description |
+|---|---|
+| `--pattern <regex>` | Non-empty JavaScript regex. Malformed or unsafe patterns exit `EXIT_USAGE` (`64`) before any disk write. |
+| `--reason <text>` | Human-readable rationale, minimum 20 characters |
+| `--scope <scope>` | Rejection category: `feature`, `bug`, or `enhancement` |
+| `--ref <ref>` | Optional source issue (`gh:owner/repo#NNN`, `jira:KEY-NN`, `linear:ABC-NN`). Malformed refs exit `EXIT_USAGE` (`64`). |
+| `--close` | Attempt a tracker comment plus close transition. Requires `--ref`. Tracker write failures return `EXIT_RUNTIME` (`2`) while preserving the local ADR. |
+| `--json` | Machine-stable JSON output with `ok`, `action`, `id`, and `tracker` status |
+
+Duplicate `(pattern, scope)` writes are idempotent and return the existing ADR rather than creating a duplicate.

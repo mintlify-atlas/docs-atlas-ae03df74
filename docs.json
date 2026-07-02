@@ -1,72 +1,85 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mintlify Starter Kit",
+  "name": "RepoKernel",
+  "theme": "luma",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#ce7152",
+    "light": "#764e3f",
+    "dark": "#34342c"
   },
-  "favicon": "/favicon.svg",
-  "navigation": {
-    "pages": [
-      {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "quickstart"
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
+  "favicon": "https://media.brand.dev/1143b262-8714-4abf-9baf-e1e5685679cb.png",
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://app.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/xantorres/repokernel"
     }
-  },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
-    ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/xantorres/repokernel"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "concepts"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/fastpath",
+              "guides/epics-and-sprints",
+              "guides/parallel-waves",
+              "guides/agents",
+              "guides/skill",
+              "guides/ci",
+              "guides/trackers",
+              "guides/pr-bridge"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/team-status",
+              "operations/merge-safety",
+              "operations/crash-recovery",
+              "operations/trust"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "CLI Reference",
+            "pages": [
+              "reference/cli-overview",
+              "reference/commands-setup",
+              "reference/commands-lifecycle",
+              "reference/commands-run",
+              "reference/commands-review",
+              "reference/commands-query"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "reference/config",
+              "reference/validation-codes",
+              "reference/exit-codes"
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

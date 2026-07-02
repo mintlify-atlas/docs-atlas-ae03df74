@@ -1,0 +1,233 @@
+---
+title: "Epics and Sprints: Multi-Task Project Planning"
+sidebarTitle: "Epics & Sprints"
+description: "Organize multi-task AI coding projects with epics, sprints, dependency graphs, and the rk import and export workflow for version-controlled roadmaps."
+---
+
+When a single task isn't enough — when you're migrating a feature, refactoring a module, or shipping a multi-step project — RepoKernel's epics and sprints give you a structured, version-controlled roadmap. Each epic is a goal; each sprint under it is one agent task with declared scope, dependencies, and a lane assignment. The dependency graph ensures work runs in the right order, and `rk import` / `rk export` make the whole plan portable and repeatable.
+
+## The create → run → ship flow
+
+<Steps>
+  <Step title="Create an epic">
+    Scaffold a new epic with a title. Pass `--json` to get a machine-readable envelope suited to agent chaining:
+
+    ```bash
+    rk create epic "Migrate auth to OAuth2"
+    ```
+
+    With `--json`:
+
+    ```bash
+    rk create epic "Migrate auth to OAuth2" --json
+    # → { "kind": "epic", "id": "E-001", "file": ".repokernel/plan/epics/E-001.md", "updated": "...", "next_actions": [...] }
+    ```
+
+    You can also seed an epic from a tracker issue:
+
+    ```bash
+    rk create epic "fallback title" --from-tracker gh:owner/repo#42
+    rk create epic "fallback title" --from-tracker jira:PROJ-2293
+    rk create epic "fallback title" --from-tracker linear:ABC-12
+    ```
+  </Step>
+
+  <Step title="Create sprints under the epic">
+    Add sprints with `--epic`, `--lane`, and `--allowed-path`. Use `--after` to declare dependencies between sprints:
+
+    ```bash
+    rk create sprint --epic E-001 "Set up JWT signing" \
+      --lane main \
+      --allowed-path "src/auth/jwt/**"
+
+    rk create sprint --epic E-001 "Set up session management" \
+      --lane main \
+      --allowed-path "src/auth/session/**" \
+      --after S-001
+    ```
+
+    The `--after S-001` flag writes a `depends_on` entry on the new sprint. RepoKernel's queue walker (`rk next`) will not surface S-002 until S-001 is `shipped`.
+
+    To author a sprint and enqueue it in one step:
+
+    ```bash
+    rk plan E-001 --create-sprint --enqueue
+    ```
+
+    `rk plan` inspects the epic and resolves whether a single sprint is appropriate or a split is better. Pass `--single-sprint` to force one sprint, or `--split` to force a preview of multiple.
+  </Step>
+
+  <Step title="Preview the dependency order">
+    Before running, preview how sprints are grouped into dependency waves:
+
+    ```bash
+    rk wave E-001
+    ```
+
+    Output shows wave groupings, blocked sprints with unmet dependency reasons, and which sprints are eligible to run now. Add `--apply --enqueue` to queue all eligible planned work:
+
+    ```bash
+    rk wave E-001 --apply --enqueue
+    ```
+  </Step>
+
+  <Step title="Run the epic">
+    Hand the epic to an agent:
+
+    ```bash
+    rk run E-001 --agent claude
+    ```
+
+    Each sprint runs in its own isolated Git worktree, in dependency order. The run pauses for review between sprints (assisted mode, the default). Pass `--dry-run` to preview the execution plan without modifying any Git state.
+  </Step>
+
+  <Step title="Ship the epic">
+    Once all sprints are shipped or cancelled, close the epic:
+
+    ```bash
+    rk epic ship E-001
+    ```
+
+    This runs validation and a registry check before marking the epic `done`. Use `rk epic close E-001` for finer control (supports `--dry-run`, `--force`, and `--run-checks`).
+  </Step>
+</Steps>
+
+## Dependency ordering with `depends_on`
+
+The `depends_on` field in sprint frontmatter controls execution order. RepoKernel's queue walker only surfaces a sprint when all its dependencies are `shipped` or `cancelled`.
+
+Add a dependency when creating a sprint:
+
+```bash
+rk create sprint --epic E-001 "Wire OAuth2 callback" \
+  --after S-001 \
+  --after S-002
+```
+
+Or write it directly in the sprint markdown frontmatter:
+
+```yaml
+---
+id: S-003
+epic_id: E-001
+title: "Wire OAuth2 callback"
+status: planned
+lane: main
+depends_on:
+  - S-001
+  - S-002
+allowed_paths:
+  - src/auth/oauth/**
+---
+```
+
+`rk next` walks the dependency graph and returns the next runnable sprint. `rk next --include-planned` also points at dependency-unblocked planned sprints that haven't been queued yet.
+
+<Note>
+  `rk next --include-planned` is useful when you want an agent to pre-flight the next planned sprint without waiting for you to manually queue it. The result includes `result: "planned"` so agent logic can distinguish it from a queued sprint.
+</Note>
+
+## Bulk import with `rk import`
+
+For large projects, declare the entire roadmap in a versioned plan YAML and import it in one transaction:
+
+```yaml
+schemaVersion: 1
+epics:
+  - alias: auth
+    title: "Migrate auth to OAuth2"
+    sprints:
+      - alias: jwt
+        title: "Set up JWT signing"
+        lane: main
+        allowed_paths:
+          - src/auth/jwt/**
+      - alias: session
+        title: "Set up session management"
+        depends_on: [jwt]
+        allowed_paths:
+          - src/auth/session/**
+```
+
+Import it:
+
+```bash
+rk import plan.yaml
+```
+
+RepoKernel allocates real `E-NNN` and `S-NNN` ids, resolves `depends_on` aliases to those ids (forward references included), and writes all files in a single transaction with one registry refresh.
+
+Useful flags:
+
+| Flag | Description |
+|---|---|
+| `--dry-run` | Print what would be created without writing anything |
+| `--skip-existing` | Skip epics whose title already exists — safe for idempotent re-runs |
+| `--json` | Emit a structured envelope with created and skipped counts |
+
+## Round-tripping with `rk export`
+
+Export the current project back to a plan YAML at any time:
+
+```bash
+rk export > plan.yaml
+```
+
+The output uses each entity's real id as its `alias`. You can re-import with `--skip-existing` to add new entities without duplicating existing ones — a clean round-trip:
+
+```bash
+rk export > plan.yaml
+# edit plan.yaml to add new epics or sprints
+rk import plan.yaml --skip-existing
+```
+
+This makes your roadmap version-controlled like everything else in the repo.
+
+## Listing and inspecting epics and sprints
+
+```bash
+rk ls epics                  # all epics, tabular
+rk ls epics --json           # structured JSON under the "epics" key
+rk ls sprints                # all sprints
+rk ls sprints --json         # structured JSON under the "sprints" key
+rk inspect E-001             # epic details: status, sprints, timestamps
+rk inspect S-001             # sprint details: status, epic, lane, dependencies, path policy
+rk epic status E-001         # shipped / in-review / queued / blocked in five lines
+```
+
+`rk epic status E-001` is especially useful at the start of a fresh agent session — it gives a concise summary without re-reading full sprint tables.
+
+## Epic status and reporting
+
+Check the state of a running epic:
+
+```bash
+rk epic status E-001
+```
+
+For a full project snapshot including findings, next sprint, and sprint groups by status:
+
+```bash
+rk report
+rk report --json             # machine-readable full payload
+```
+
+<Tip>
+  `rk report` is the fastest way to orient a fresh agent session. It prints headline health, the next runnable sprint, and sprint groups by status — all in one command. Pass `--all` to include shipped sprints and the full epic table, or `--json` for a structured payload containing `project`, `counts`, `maxSeverity`, `next`, `epics[]`, `sprints[]`, and `findings[]`.
+</Tip>
+
+## Closing an epic
+
+Once every sprint under an epic is either `shipped` or `cancelled`, ship the epic:
+
+```bash
+rk epic ship E-001
+```
+
+This is the epic-level counterpart to `rk ship S-NNN` — it runs validation and a registry check as part of the close flow. For finer control:
+
+```bash
+rk epic close E-001 --dry-run      # preview without writing
+rk epic close E-001 --run-checks   # run checksCmd before closing
+rk epic close E-001 --force        # close even if some sprints aren't yet shipped
+```

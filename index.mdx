@@ -1,20 +1,81 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "RepoKernel: AI Agent Orchestration for Git"
+sidebarTitle: "Home"
+description: "RepoKernel runs AI coding agents in isolated Git worktrees with scoped paths, dependency ordering, review gates, and merge safety."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+RepoKernel is the coordination layer between your AI coding agents and your Git repository. Every task runs in its own worktree, locked to declared file paths, sequenced by dependencies, and gated by review before anything reaches `main`. No daemon, no cloud, no database — your repo is the source of truth.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install RepoKernel and run your first AI coding task in under 60 seconds.
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts">
+    Learn tasks, sprints, epics, queues, reviews, and gates — the full model.
+  </Card>
+  <Card title="CLI Reference" icon="terminal" href="/reference/cli-overview">
+    Every command, flag, and exit code documented with real examples.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/reference/config">
+    Configure paths, policies, worktrees, automation, and parallel execution.
+  </Card>
+</CardGroup>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+## Why RepoKernel
+
+Running one AI coding agent is easy. Running three in parallel against the same repo is where things fall apart — state conflicts, double-dispatch, scope creep, and zero visibility. RepoKernel fixes each of these at the filesystem layer.
+
+<CardGroup cols={2}>
+  <Card title="Isolated Worktrees" icon="code-branch">
+    Each task runs in its own `git worktree`. Your `main` branch stays clean until review and merge.
+  </Card>
+  <Card title="Atomic Sprint Claims" icon="lock">
+    Two parallel `rk run` invocations cannot both pick up the same sprint — claims are filesystem-atomic.
+  </Card>
+  <Card title="Scope Enforcement" icon="shield">
+    `allowed_paths` in sprint frontmatter flags out-of-scope edits at review time before merge.
+  </Card>
+  <Card title="Review Gates" icon="check">
+    Configured checks must pass and a review verdict must be recorded before anything reaches `main`.
+  </Card>
+  <Card title="Merge-Safe Registry" icon="merge">
+    A custom Git merge driver unions agent state by ID — no JSON conflict markers between parallel agents.
+  </Card>
+  <Card title="Crash Recovery" icon="rotate">
+    Failed or runaway agents leave a resumable run, not a corrupted repository.
+  </Card>
+</CardGroup>
+
+## Four Ways to Use It
+
+<CardGroup cols={2}>
+  <Card title="Fastpath" icon="bolt" href="/guides/fastpath">
+    One task, one worktree, done. `rk run -m "..."` is the fastest path to agent-assisted coding.
+  </Card>
+  <Card title="Agent-Operated" icon="robot" href="/guides/skill">
+    Install the bundled skill into Claude Code, Cursor, Windsurf, or Copilot so your agent drives `rk` directly.
+  </Card>
+  <Card title="Epics & Sprints" icon="list-check" href="/guides/epics-and-sprints">
+    Multi-task projects with dependency graphs, parallel waves, and full audit trails.
+  </Card>
+  <Card title="Multi-Agent Fleet" icon="users" href="/operations/team-status">
+    Team status, merge-safe state, tracker and PR bridges for 3+ agents in parallel.
+  </Card>
+</CardGroup>
+
+## Guides
+
+<CardGroup cols={2}>
+  <Card title="Parallel Waves" icon="wave-square" href="/guides/parallel-waves">
+    Run independent sprints concurrently with path-conflict detection and dependency ordering.
+  </Card>
+  <Card title="Agent Adapters" icon="plug" href="/guides/agents">
+    Configure Claude, Codex, Ollama, or a custom shell command as your coding agent.
+  </Card>
+  <Card title="CI Integration" icon="github" href="/guides/ci">
+    Gate PRs with `rk validate` using the official GitHub Actions composite action.
+  </Card>
+  <Card title="Tracker Bridge" icon="ticket" href="/guides/trackers">
+    Import issues from Linear, Jira, and GitHub Issues and write status back.
+  </Card>
+</CardGroup>

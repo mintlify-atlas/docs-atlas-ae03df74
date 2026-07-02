@@ -1,0 +1,199 @@
+---
+title: "PR Bridge: Generate and Sync GitHub Pull Requests"
+sidebarTitle: "PR Bridge"
+description: "Generate PR bodies from sprint content, link and sync pull request status, and post comments using the rk pr commands."
+---
+
+The RepoKernel PR bridge is the connection between a finished sprint and the pull request that ships it. Four commands cover the full lifecycle: link a PR URL to a sprint, generate a body from sprint frontmatter and post it, sync the PR's open/draft/merged/closed status back into sprint metadata, and post agent feedback as comments. Every operation is idempotent and rerunnable — dropping a `rk pr body` or `rk pr sync` call into an automated loop is safe.
+
+## Quick start
+
+```bash
+# 1. Open a PR (manually or via gh) and capture the URL
+gh pr create --title "$(rk inspect S-042 --json | jq -r .title)" \
+             --body "$(rk pr body S-042)"
+
+# 2. Tell rk which PR belongs to the sprint
+rk pr link S-042 https://github.com/owner/repo/pull/456
+
+# 3. Refresh the description from the latest sprint state
+rk pr body S-042 --write
+
+# 4. Sync PR status into sprint metadata
+rk pr sync S-042
+
+# 5. Post agent feedback
+rk pr comment S-042 "Tests green. Lint clean. Ready for review."
+```
+
+## Commands
+
+### `rk pr link`
+
+Persist a PR URL under sprint frontmatter `extras.pr`. Provider is inferred from the URL hostname:
+
+| URL pattern | Provider |
+|---|---|
+| `github.com` / `*.github.com` | `github` |
+| `gitlab.com` / `*.gitlab.com` | `gitlab` |
+| `bitbucket.org` / `*.bitbucket.org` | `bitbucket` |
+| anything else | rejected with `unsupported PR host '<hostname>'` |
+
+Self-hosted GitHub Enterprise and GitLab CE URLs are intentionally rejected. RepoKernel returns `unknown` for non-public hosts rather than silently miscategorizing them, so self-hosted URLs can never be treated as GitHub when they aren't.
+
+The metadata shape stored on the sprint:
+
+```yaml
+extras:
+  pr:
+    provider: github
+    url: https://github.com/owner/repo/pull/456
+    number: 456                       # extracted from /pull/N
+    status: open                      # populated by rk pr sync
+    last_sync_at: 2026-05-04T13:30:00.000Z
+```
+
+URLs are validated at the schema layer — `javascript:`, `data:`, `vbscript:`, `file:`, and `ftp:` schemes are rejected.
+
+### `rk pr body`
+
+Render a PR body from the sprint frontmatter and body. The function is pure: the same sprint always produces the same body, so rerunning `rk pr body S-042 --write` never creates spurious diffs in the PR description.
+
+<Note>
+  `renderPrBody` is deterministic — identical sprint state produces identical output. Safe to call repeatedly in automated flows without generating noisy PR history.
+</Note>
+
+```bash
+rk pr body S-042                              # print body to stdout
+rk pr body S-042 --json                       # emit { body } envelope
+rk pr body S-042 --summary "Tests pass; coverage 92%"
+rk pr body S-042 --write                      # post to the linked PR (gh CLI required)
+```
+
+The generated body template:
+
+```markdown
+## Description
+
+{sprint.title}
+
+{sprint.body}
+
+---
+
+**Sprint:** S-042
+**Lane:** core
+**Allowed paths:** packages/auth/**, tests/auth/**
+**Review required:** yes
+**Status:** active
+
+## Agent Summary
+
+{--summary text}
+
+## Checklist
+
+- [ ] Tests passing
+- [ ] No new warnings
+- [ ] Documentation updated
+- [ ] Ready for review
+```
+
+### `rk pr sync`
+
+Refresh the PR `status` field from GitHub via `gh pr view --json state,url,title,isDraft,mergedAt`. Maps GitHub state to RepoKernel status:
+
+| GitHub | RepoKernel `status` |
+|---|---|
+| `isDraft: true` | `draft` |
+| `mergedAt` set | `merged` |
+| `state: CLOSED` | `closed` |
+| anything else | `open` |
+
+GitHub-only today. GitLab and Bitbucket return `sync only supported for GitHub`.
+
+### `rk pr status`
+
+Inspect the persisted PR metadata. Use `--json` to pipe into automation:
+
+```bash
+rk pr status S-042
+# S-042
+#   url:    https://github.com/owner/repo/pull/456
+#   status: open
+#   number: 456
+#   synced: 2026-05-04T13:30:00.000Z
+```
+
+### `rk pr comment`
+
+Post a comment on the linked PR via `gh pr comment <url> --body <message>`. Requires `gh` installed and authenticated.
+
+```bash
+rk pr comment S-042 "Tests green; ready for review"
+```
+
+Error reasons are mapped to short, body-safe strings: `gh_not_installed`, `not_authenticated`, `not_found`. The `Command failed: gh ...` prefix Node attaches to process errors is stripped before reaching stderr — `--body` content cannot leak into logs.
+
+## Environment
+
+Write operations (`rk pr body --write`, `rk pr comment`, `rk pr sync`) require the `gh` CLI to be installed and authenticated. The bridge reuses whatever auth `gh` has configured — `gh auth login` or a `GITHUB_TOKEN` environment variable.
+
+## Concurrency
+
+`writePrMetadata` writes through the shared per-sprint `extras` lock, so concurrent `rk pr` and `rk tracker` commands cannot lose each other's sibling metadata via a stale `extras` snapshot. The lock key is sanitised to a single path segment.
+
+## End-to-end flow
+
+<Steps>
+  <Step title="Agent finishes sprint">
+    The agent completes its work. Call `rk review S-042` to create a review stub and transition the sprint to `review` status.
+  </Step>
+  <Step title="Link the pull request">
+    Once the PR is open, link it to the sprint:
+
+    ```bash
+    rk pr link S-042 https://github.com/owner/repo/pull/456
+    ```
+  </Step>
+  <Step title="Post the generated PR body">
+    Generate a body from sprint frontmatter and post it directly to the PR:
+
+    ```bash
+    rk pr body S-042 --write
+    ```
+
+    Because `renderPrBody` is pure, you can safely rerun this after updating sprint metadata — no spurious diffs.
+  </Step>
+  <Step title="Update the tracker">
+    Push a status comment back to the linked issue:
+
+    ```bash
+    rk tracker comment S-042 "Agent finished — review pending"
+    ```
+
+    See [Tracker Bridge](/guides/trackers) for the full write-side surface.
+  </Step>
+  <Step title="Close after review is accepted">
+    Once the review verdict is recorded as `accepted`, close the sprint:
+
+    ```bash
+    rk close S-042
+    ```
+
+    Or use the high-level ceremony helper to run review, close, validation, and registry check in one visible flow:
+
+    ```bash
+    rk ship S-042
+    ```
+  </Step>
+</Steps>
+
+## Roadmap
+
+Coming next on this surface:
+
+- **Auto-link from `rk run`.** When the agent reports the PR URL in its summary, link it without a follow-up command.
+- **Auto-body on close.** `rk close` will optionally post the rendered body if a PR is linked.
+- **Watch CI.** Surface `gh pr checks` status alongside `rk team status`.
+- **`--provider` override.** Explicit provider flag to support self-hosted GitHub Enterprise and GitLab CE once those integrations are wired end-to-end.

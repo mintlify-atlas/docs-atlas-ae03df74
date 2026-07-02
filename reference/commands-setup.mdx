@@ -1,0 +1,201 @@
+---
+title: "Setup Commands: rk init, rk doctor, rk fix, rk recover"
+sidebarTitle: "Setup Commands"
+description: "Reference for rk init, rk doctor, rk fix, and rk recover — the commands for initializing, diagnosing, and repairing a RepoKernel project."
+---
+
+These commands handle everything before your first sprint runs: bootstrapping a project layout, diagnosing configuration problems, applying safe mechanical repairs, and recovering from interrupted multi-step mutations. Run them in order when setting up a new repository or after an unexpected failure leaves your project state inconsistent.
+
+---
+
+## `rk init`
+
+Create a default RepoKernel project layout without overwriting existing files.
+
+```bash
+rk init [--cwd <path>] [--example] [--commit] [--dir <path>]
+```
+
+| Flag | Description |
+|---|---|
+| `--example` | Creates a working project with one epic, multiple sprints, a queue, and an accepted review so `rk validate` and `rk next` work immediately after init |
+| `--commit` | Commits the initialized RepoKernel metadata (`repokernel.config.yaml` and generated state) so worktree-backed commands can run from a clean main checkout |
+| `--dir <path>` | Relocates all RepoKernel writes to a custom repo-relative base directory (default `.repokernel`). Layout is always `<dir>/plan/<entity>` for epics, sprints, reviews, queues, and lanes |
+
+When `--dir` is set, nothing leaks into `.repokernel/`. For example, `rk init --dir rk` writes epics to `rk/plan/epics`, the registry to `rk/registry.json`, and so on. The bundled agent edit-block hook (`pre-tool-use.sh`) delegates path classification to `rk path-policy <file>`, so it stays correct regardless of the directory chosen.
+
+---
+
+## `rk doctor`
+
+Diagnose setup problems across the full configuration surface.
+
+```bash
+rk doctor [--cwd <path>]
+```
+
+`rk doctor` inspects: config structure, git state, path existence, queue integrity, registry freshness, `.gitattributes` entries, and merge driver configuration. Each check is reported as pass or fail. The command exits `1` when any issue is detected, so it can gate CI pipelines or post-clone hooks.
+
+<Tip>
+Run `rk doctor` first whenever `rk validate` or `rk start` produce unexpected errors. It often surfaces a missing merge driver or stale `.gitattributes` entry that would otherwise be hard to trace.
+</Tip>
+
+---
+
+## `rk fix`
+
+Preview or apply safe mechanical fixes surfaced by `rk doctor` and `rk validate`.
+
+```bash
+rk fix --preview [--cwd <path>]
+rk fix --apply --yes [--cwd <path>]
+```
+
+| Flag | Description |
+|---|---|
+| `--preview` | List all repairs that would be applied without writing any files |
+| `--apply` | Write only repairs classified as safe by RepoKernel. Requires `--yes` to confirm. |
+| `--yes` | Required with `--apply`; skips the interactive confirmation prompt |
+
+`rk fix` always runs both `live` and `audit` validator scopes — its job is to repair everything it can find, including historical-hygiene gaps. Findings that require human judgment are printed as suggestions rather than applied automatically.
+
+---
+
+## `rk recover`
+
+Audit and optionally repair operational state stored under `<git-common-dir>/repokernel/`. Use this command after an interrupted run, a crashed `rk close`, or any situation where worktree, run, or lane-claim files may be inconsistent.
+
+```bash
+rk recover [--preview] [--cwd <path>]      # default — list findings only
+rk recover --apply [--cwd <path>]          # heal, replay journals, write recover.report.json
+rk recover --dry-run                        # alias for --preview
+rk recover --journal-only [--apply]         # skip worktrees / runs / lane-claim phases
+rk recover --json                           # JSON output
+```
+
+### Journal Classification
+
+Every pending journal entry is placed into exactly one classification bucket. `--apply` acts on each bucket as follows:
+
+| Classification | Outcome |
+|---|---|
+| `safe_replay` | Replay incomplete steps from `step.content`; rename `pending → done` |
+| `already_applied` | Mark steps complete; rename `pending → done`. No file mutation. |
+| `diverged` | Quarantine to `OP-<ulid>.unrecoverable.<ts>.<rand>.json`; surface P1 finding; non-zero exit |
+| `unknown_schema` | Leave pending in place; surface P1 finding; non-zero exit. A newer `rk` may know how to replay it. |
+| `corrupt` | Quarantine; surface P1 finding; non-zero exit. Journal is unreadable or tampered. |
+
+After `--apply`, a structured report is written to `<opRoot>/recover.report.json`.
+
+<Warning>
+`diverged`, `unknown_schema`, and `corrupt` classifications all produce a non-zero exit. Review the P1 findings with `rk validate` before continuing work.
+</Warning>
+
+---
+
+## `rk install-skill`
+
+Install the RepoKernel agent skill into a supported IDE or agent tool.
+
+```bash
+rk install-skill
+rk install-skill --ide cursor
+rk install-skill --ide windsurf
+rk install-skill --ide copilot
+rk install-skill --ide gemini
+rk install-skill --ide opencode
+rk install-skill --ide cursor --project   # project-scoped install
+```
+
+Omitting `--ide` installs the skill globally for the default detected environment. The `--project` flag scopes the install to the current repository rather than the user's global config.
+
+---
+
+## `rk validate`
+
+Run validators and print findings against the current project state.
+
+```bash
+rk validate [--cwd <path>] [--json] [--audit]
+            [--fail-on P0|P1|P2|P3] [--only P0|P1|P2|P3] [--min P0|P1|P2|P3]
+            [--code CODE...] [--entity ID] [--open]
+```
+
+| Flag | Description |
+|---|---|
+| `--audit` | Include `audit`-scope rules: historical hygiene on shipped/frozen state (e.g. missing `base_sha`, `closed_at`, `end_sha`). Off by default to keep day-to-day output noise-free. |
+| `--fail-on P0\|P1\|P2\|P3` | Override severity threshold for exit code (default: `policies.severityFailThreshold` from config) |
+| `--only P0\|P1\|P2\|P3` | Show only findings at exactly this severity |
+| `--min P0\|P1\|P2\|P3` | Show findings at this severity and above |
+| `--code CODE` | Filter to a specific finding code. Repeatable. |
+| `--entity ID` | Filter findings to a specific entity, e.g. `S-001` |
+| `--open` | Open the first finding's file in `$EDITOR`. Cannot be combined with `--json`. |
+| `--json` | Machine-stable JSON output with a `"findings"` top-level key |
+
+Filters (`--only`, `--min`, `--code`, `--entity`) affect **displayed** findings only. The exit code always reflects full project health within the active scope.
+
+### Validator Scopes
+
+| Scope | Purpose | Example rules |
+|---|---|---|
+| `live` (default) | Invariants on current state that are fixable now | Broken epic/sprint refs, dependency cycles, `SHIPPED_SPRINT_IN_QUEUE`, `ACTIVE_SPRINT_MISSING_BASE_SHA`, queue ordering, lane orphans |
+| `audit` (opt-in via `--audit`) | Historical hygiene on frozen state — re-firing forever produces noise without an actionable target | `SHIPPED_SPRINT_MISSING_CLOSED_AT`, `SHIPPED_SPRINT_MISSING_END_SHA`, `SHIPPED_SPRINT_MISSING_BASE_SHA`, `SHIPPED_SPRINT_MISSING_REVIEW` |
+
+`rk report`, `rk status`, and lifecycle gates (`rk run`, `rk start`, `rk close`, etc.) all default to `live` scope. `rk fix` always runs both scopes.
+
+Use `rk explain <CODE>` to look up any finding code:
+
+```bash
+rk explain ACTIVE_SPRINT_MISSING_BASE_SHA
+```
+
+---
+
+## `rk import` / `rk export`
+
+Bulk-create epics and sprints from a declarative YAML plan, or emit the current project as a round-trippable plan file.
+
+```bash
+rk import plan.yaml [--dry-run] [--skip-existing] [--json] [--cwd <path>]
+rk export [--cwd <path>]
+```
+
+### `rk import` Flags
+
+| Flag | Description |
+|---|---|
+| `--dry-run` | Print the epics and sprints that would be created (ids are advisory) without writing any files |
+| `--skip-existing` | Skip any epic whose title already exists; enables idempotent re-runs |
+| `--json` | Emit a `{ kind, created_epics, created_sprints, skipped_epics, ... }` envelope |
+
+`rk import` allocates ids internally. `depends_on` is written with local aliases and resolved to real `S-NNN` ids — forward references are supported. The entire import is one transaction with a single registry refresh.
+
+### Plan Schema
+
+The plan file uses `schemaVersion: 1`. An unknown key fails the import:
+
+```yaml
+schemaVersion: 1
+epics:
+  - alias: auth
+    title: "Authentication System"
+    sprints:
+      - alias: tokens
+        title: "Parse JWT tokens"
+        lane: main
+        status: planned
+        depends_on: []
+        allowed_paths:
+          - "src/auth/**"
+```
+
+Each epic requires `alias` and `title`. Each sprint requires `alias` and `title`; optional fields include `lane`, `status`, `depends_on`, `allowed_paths`, `denied_paths`, `adr_links`, `target_date`, `body`, and `extras`.
+
+### `rk export`
+
+Emit the current project as a plan YAML on stdout with `alias` set to each entity's existing id. Use it to snapshot a project for migration or replay:
+
+```bash
+rk export > plan.yaml
+rk import plan.yaml --skip-existing   # round-trips to zero new entities
+```

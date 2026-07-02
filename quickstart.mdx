@@ -1,47 +1,129 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with RepoKernel in 60 Seconds"
+sidebarTitle: "Quickstart"
+description: "Install RepoKernel, initialize a project, and run your first AI coding task in under 60 seconds using the deterministic fake agent."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+RepoKernel gets out of your way fast. This guide takes you from a fresh install to a reviewed, merged task using the built-in `fake` agent — no API keys, no cloud calls. Once that works, swapping in Claude, Codex, or Ollama is a single flag change.
 
 <Steps>
+
   <Step title="Install">
-    Describe how to install your product or sign up.
+    Install RepoKernel globally from npm. Node 20 or later is required.
 
     ```bash
-    npm install your-package
+    npm i -g repokernel
     ```
-  </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+    Verify the install:
 
     ```bash
-    your-cli init
+    rk --version
     ```
+
+    Both `rk` and `repokernel` are aliases for the same binary. You can use either throughout this guide.
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+  <Step title="Initialize your project">
+    Navigate to any existing Git repository, then run:
 
     ```bash
-    your-cli start
+    cd your-git-repo
+    rk init --commit
     ```
+
+    `rk init` writes `repokernel.config.yaml` and scaffolds the `.repokernel/` state directory (epics, sprints, reviews, queues, lanes, and the registry). The `--commit` flag immediately commits that metadata so worktree-backed commands can run from a clean `main` checkout — without it, worktree creation fails if uncommitted files are present.
+
+    If you want a fully working example you can validate and run against right away, use `--example` instead:
+
+    ```bash
+    rk init --example --commit
+    ```
+
+    `--example` creates a project with one epic, multiple sprints, a queue, and an accepted review pre-populated. `rk validate` and `rk next` both work immediately on the generated scaffold — useful for exploring the system before you have real tasks.
   </Step>
+
+  <Step title="Run your first task">
+    Run a task from a plain-English description using the deterministic `fake` agent:
+
+    ```bash
+    rk run -m "Add a README section about RepoKernel" --agent fake
+    ```
+
+    Here is what happens under the hood:
+
+    1. **Synthesis** — RepoKernel allocates a task alias (`T-001`), scaffolds a sprint with the message as its title, and queues it in the default lane.
+    2. **Worktree creation** — An isolated Git worktree is created on a new branch (`rk/sprint/E-NNN/S-NNN`). Your `main` branch stays untouched.
+    3. **Agent run** — The `fake` agent runs inside the worktree. It writes a placeholder file and exits cleanly. With a real agent, this is where the LLM makes code changes.
+    4. **Review pause** — The run transitions the sprint to `review` status and pauses, waiting for a verdict.
+
+    No API keys are needed for `fake`. It is a deterministic test agent designed for demos and CI — it always succeeds, always writes the same placeholder, and exercises the full review-gate flow.
+  </Step>
+
+  <Step title="Review and close the task">
+    Once the agent finishes, you have two paths:
+
+    ```bash
+    rk close T-001   # review passes — merge to main
+    ```
+
+    ```bash
+    rk discard T-001 # drop without merging
+    ```
+
+    `rk close` is not a rubber stamp. Before merging, it:
+
+    - Verifies the sprint has an accepted review verdict
+    - Runs the repo-configured `checksCmd` (linting, type-checking, tests) if one is set
+    - Validates that no files outside `allowed_paths` were touched
+    - Confirms the registry is in sync
+
+    Only when every check passes does RepoKernel record `end_sha`, stamp `closed_at`, transition the sprint to `shipped`, and merge the worktree branch into `main`. The full audit trail — what changed, when, from which sha to which sha — is preserved in the sprint and review files.
+
+    `rk discard T-001` drops the task without merging. The worktree is removed, the sprint is marked `cancelled`, and no changes reach `main`.
+  </Step>
+
+  <Step title="Run with a real agent">
+    Swap `fake` for an LLM-backed adapter when you are ready for real coding:
+
+    <CodeGroup>
+
+    ```bash Claude
+    rk run -m "Add a /health endpoint that returns 200 OK" --agent claude
+    ```
+
+    ```bash Codex
+    rk run -m "Add a /health endpoint that returns 200 OK" --agent codex
+    ```
+
+    ```bash Ollama (local, no API key)
+    rk run -m "Add a /health endpoint that returns 200 OK" --agent ollama
+    ```
+
+    </CodeGroup>
+
+    Each adapter passes the task description and worktree context to the underlying agent CLI. `ollama` runs a local model — no API keys, no cloud calls. See the [Agent Adapters guide](/guides/agents) for setup instructions, credential configuration, and how to wire a custom adapter via `repokernel.config.yaml`.
+  </Step>
+
 </Steps>
 
 <Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
-
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+Run `rk report` for a full project snapshot at any time — health, next work, epics, sprint groups by status, and findings. Add `--json` for machine-readable output suited to agent chaining or CI dashboards.
 </Tip>
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Core Concepts" icon="book-open" href="/concepts">
+    Learn the full entity model — tasks, sprints, epics, queues, lanes, reviews, and gates. The vocabulary you need to use the full system.
+  </Card>
+  <Card title="Fastpath in Depth" icon="bolt" href="/guides/fastpath">
+    What the three-command flow does behind the scenes: synthesis, worktree lifecycle, review, and merge safety.
+  </Card>
+  <Card title="Epics & Sprints" icon="diagram-project" href="/guides/epics-and-sprints">
+    Model multi-task projects with dependency graphs, path scopes, and parallel wave execution.
+  </Card>
+  <Card title="Agent Adapters" icon="robot" href="/guides/agents">
+    Set up Claude, Codex, Ollama, or a custom adapter. Configure credentials and wire the bundled agent skill.
+  </Card>
+</CardGroup>

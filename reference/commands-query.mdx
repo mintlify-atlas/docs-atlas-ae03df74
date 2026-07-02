@@ -1,0 +1,244 @@
+---
+title: "Query and Inspect Commands: ls, inspect, status, report"
+sidebarTitle: "Query Commands"
+description: "Reference for rk ls, rk inspect, rk status, rk next, rk report, rk registry, rk explain, and related read-only query commands."
+---
+
+Query commands are read-only: they never mutate project state or write files (except `rk registry --write`). Use them to check health, resolve what to do next, inspect individual entities, explain validation findings, and preview dependency chains before committing to a run. All of them are safe to call from CI status checks or monitoring scripts.
+
+---
+
+## `rk status`
+
+Print a project health summary: sprint counts, maximum severity finding, and the next sprint to work on.
+
+```bash
+rk status [--cwd <path>] [--json]
+rk status --brief [--json]
+```
+
+Running `rk` with no subcommand is equivalent to `rk status`.
+
+`--brief` additionally reports per-lane availability under `lanes[]` (each entry: `{ name, active, free }`, where `free` means no active sprint occupies the lane) and a single `nextCommand` — the exact shell command to make progress right now, such as `rk run S-005` or `rk queue add S-006 --lane main && rk start S-006`.
+
+---
+
+## `rk next`
+
+Resolve the next runnable sprint for a lane, with optional epic or planned-sprint scoping.
+
+```bash
+rk next [--cwd <path>] [--json] [--lane <lane>] [--epic <epic-id>] [--include-planned]
+```
+
+| Flag | Description |
+|---|---|
+| `--lane <lane>` | Restrict the lookup to one named lane |
+| `--epic <id>` | Restrict the lookup to sprints belonging to one epic |
+| `--include-planned` | If no queued sprint is runnable, return the next dependency-unblocked planned sprint with `result: "planned"` |
+| `--json` | Machine-stable JSON output |
+
+Exit `0` for `runnable` or `planned`, `1` for blocked or none available, `2` for runtime errors.
+
+---
+
+## `rk report`
+
+Print a lean project snapshot: headline (project · epic count · sprint count · health), the next runnable sprint, and sprint groups by status. Findings appear only when present. Shipped and done items are hidden by default. ANSI-colored on TTYs; respects `NO_COLOR`.
+
+```bash
+rk report [--all] [--json] [--cwd <path>]
+```
+
+| Flag | Description |
+|---|---|
+| `--all` | Include shipped/done sprints and the full epic table |
+| `--json` | Emit the full structured report as canonical JSON instead of the human-readable view |
+
+The JSON payload always contains `project`, `generatedAt`, `counts`, `maxSeverity`, `next`, `epics[]`, `sprints[]`, and `findings[]` — regardless of `--all`.
+
+---
+
+## `rk ls`
+
+List entities by type. All variants accept `--json` for machine-stable output.
+
+```bash
+rk ls epics   [--json]
+rk ls sprints [--json]
+rk ls reviews [--json]
+rk ls lanes   [--json]
+```
+
+See the [CLI Overview](/reference/cli-overview) for the JSON envelope key returned by each variant.
+
+---
+
+## `rk inspect <id>`
+
+Show detailed information about any entity: sprint, epic, review, or lane.
+
+```bash
+rk inspect S-001    # sprint
+rk inspect E-001    # epic
+rk inspect R-001    # review
+rk inspect main     # lane
+```
+
+Sprint inspection includes status, epic, lane, timestamps, dependency state, review state, and path policy. Epic inspection includes all sprint statuses and blocked-by relationships. Lane inspection includes lock state, active sprint, and queue depth.
+
+---
+
+## `rk explain <CODE>`
+
+Explain a validation finding code in human-readable detail.
+
+```bash
+rk explain QUEUED_DEPENDENCY_NOT_SHIPPED
+rk explain ACTIVE_SPRINT_MISSING_BASE_SHA
+```
+
+Output includes: severity, why it matters, the expected project state, fix guidance, and a related command to resolve it. Use this alongside `rk validate` output to understand and act on every finding code.
+
+---
+
+## `rk registry`
+
+Generate, write, or check the registry — the computed summary of all project entities.
+
+```bash
+rk registry [--cwd <path>] [--json] [--write] [--check] [--explain]
+```
+
+| Flag | Description |
+|---|---|
+| (none) | Print the registry as canonical JSON to stdout |
+| `--write` | Write the regenerated registry to `config.paths.registry` |
+| `--check` | Compare the regenerated state against the file on disk. Exits `1` with `REGISTRY_DRIFT` if they differ. |
+| `--explain` | With `--check`, print the first drift reason and suggest `rk registry --write` as the fix |
+
+`rk gates` runs `rk registry --check --explain` automatically as part of the gate bundle.
+
+---
+
+## `rk chain preview`
+
+Show which queued sprints would execute next in a chain run. When `--epic` is given, also lists `planned`/`pending` sprints in that epic that are not yet queued — useful for pre-flight inspection before `rk start`.
+
+```bash
+rk chain preview [--lane <lane>] [--epic <epic-id>] [--limit N] [--ignore-disabled] [--json] [--cwd <path>]
+rk chain E-001    # shorthand for: rk chain preview --epic E-001
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--lane` | default lane | Restrict the preview to this lane |
+| `--epic <id>` | — | Filter to sprints in this epic; also shows planned sprints for the epic |
+| `--limit N` | `5` | Maximum sprints to show |
+| `--ignore-disabled` | `false` | Show a preview even when `chaining.enabled: false` |
+
+`rk chain <E-NNN>` is a shorthand for text output only. For `--json`, `--lane`, or `--limit`, use the full `rk chain preview` form. A sprint id or other non-epic argument is rejected with a usage error.
+
+JSON output includes a `planned_for_epic` array (non-empty only when `--epic` is given):
+
+```json
+{
+  "chain": [],
+  "ineligible": [],
+  "planned_for_epic": [{ "id": "S-012", "status": "planned" }]
+}
+```
+
+---
+
+## `rk team status`
+
+Show the status of all team members and their active sprint assignments.
+
+```bash
+rk team status [--json] [--watch] [--sprint <id>]
+```
+
+| Flag | Description |
+|---|---|
+| `--watch` | Continuously refresh the output (live dashboard mode) |
+| `--sprint <id>` | Scope the view to a specific sprint |
+
+---
+
+## `rk plan <epic-id>`
+
+Preview or create sprint work for an existing epic. Default mode is preview-only. Straightforward epics resolve to a single sprint; broad epics produce a proposed split unless `--single-sprint` overrides it.
+
+```bash
+rk plan E-001 [--create-sprint] [--enqueue] [--single-sprint] [--split] [--no-sprint]
+              [--allowed-path <glob>...] [--yes] [--json] [--cwd <path>]
+```
+
+| Flag | Description |
+|---|---|
+| `--create-sprint` | Create a sprint when planning resolves to single-sprint mode |
+| `--enqueue` | Queue the created sprint immediately |
+| `--single-sprint` | Force one-sprint planning mode |
+| `--split` | Force split-preview mode |
+| `--no-sprint` | Preview without creating or proposing any sprint files |
+| `--allowed-path <glob>` | Allowed path for the created sprint. Repeatable; each value is one glob (commas are literal). |
+
+---
+
+## `rk wave <selector>`
+
+Preview dependency order across one or more epics. Mutations require `--apply`.
+
+```bash
+rk wave E-035..E-040 [--apply] [--enqueue] [--json] [--cwd <path>]
+```
+
+Selectors accept a single id (`E-035`), comma-separated ids, or a range (`E-035..E-040`). `--apply --enqueue` queues eligible planned sprints whose dependencies are already shipped or cancelled. Blocked sprints are listed with the unmet dependency reason.
+
+---
+
+## `rk create epic` / `rk create sprint`
+
+Scaffold new entities from the command line without editing YAML manually.
+
+```bash
+rk create epic "Core parser" [--from-tracker <source>:<ref>] [--allow-tracker-fallback] [--json] [--cwd <path>]
+
+rk create sprint --epic E-001 "Parse tokens" \
+  [--lane <name>] [--status planned|pending] [--after S-NNN] \
+  [--allowed-path <glob>...] [--denied-path <glob>...] [--enqueue] [--cwd <path>]
+```
+
+### `rk create epic` Flags
+
+| Flag | Description |
+|---|---|
+| `--from-tracker <ref>` | Seed title and body from an external tracker. Forms: `gh:owner/repo#NNN`, `jira:KEY-NN`, `linear:ABC-NN`. |
+| `--allow-tracker-fallback` | If the tracker fetch fails, create a plain epic from the positional title. Without this flag, fetch failures exit `2` before any disk write. |
+| `--json` | Machine-stable JSON output |
+
+When `--from-tracker` succeeds, the positional title is replaced with the tracker title. Linkage is recorded in `extras.external_id`, `extras.tracker_source`, `extras.tracker_url`, `extras.tracker_labels`, and `extras.tracker_assignee`. Malformed `--from-tracker` values exit `EXIT_USAGE` (`64`) before any disk write.
+
+### `rk create sprint` Flags
+
+| Flag | Description |
+|---|---|
+| `--lane` | Lane name (default: `main`) |
+| `--status` | Initial status: `planned` or `pending` |
+| `--after S-NNN` | Add `depends_on` for the given sprint. Repeatable; also accepts comma-separated values. |
+| `--allowed-path <glob>` | Restrict the sprint to this path. Repeatable; each value is one glob. |
+| `--denied-path <glob>` | Forbid this path inside the sprint scope. Repeatable. |
+| `--enqueue` | Create the lane queue slot and set status to `queued` in the same mutation |
+
+---
+
+## `rk audit-trail`
+
+Show the complete audit trail of mutations for the project.
+
+```bash
+rk audit-trail [--cwd <path>] [--json]
+```
+
+The audit trail records every journaled mutation in the order it was applied, including the command that triggered it, the entities affected, and the before/after state. Use it for compliance review or to understand how a project reached its current state.
