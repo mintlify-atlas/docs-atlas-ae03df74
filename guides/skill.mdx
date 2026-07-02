@@ -80,7 +80,7 @@ Once the skill is installed, your agent uses these seven verbs to drive the enti
 
 The skill installs three hooks alongside the slash commands:
 
-- **`PreToolUse`** — Blocks direct edits to `.repokernel/**` and routes the agent through the matching `rk` verb. This is what prevents registry corruption.
+- **`PreToolUse`** — Blocks direct edits to RepoKernel state files (classified via `rk path-policy`, so it stays correct for repos initialized with a custom `rk init --dir <path>`) and routes the agent through the matching `rk` verb. This is what prevents registry corruption.
 - **`SessionStart`** — Injects a one-line dashboard (`rk status --brief`) at the start of every session on a RepoKernel repo, so the agent always knows current state.
 - **`PostToolUse`** — After `rk close`, `rk ship`, `rk epic close`, or `rk epic ship`, surfaces what's now unblocked so the agent can suggest the next step without a round trip.
 

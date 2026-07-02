@@ -1,7 +1,7 @@
 ---
 title: "repokernel.config.yaml Reference: All Configuration Options"
 sidebarTitle: "Configuration"
-description: "Complete reference for repokernel.config.yaml — paths, policies, git, worktrees, automation, parallel execution, and chaining configuration."
+description: "Complete reference for repokernel.config.yaml — all fields: paths, policies, git, worktrees, automation, review, routing, parallel, chaining, and agents."
 ---
 
 `repokernel.config.yaml` lives at the root of your repository and is the single source of policy truth for every RepoKernel behavior. No project-specific logic lives in framework code — all sprint rules, lane policies, worktree naming, and gate thresholds are driven exclusively from this file. Generate the default layout with `rk init --commit`.
@@ -21,9 +21,15 @@ Every `repokernel.config.yaml` must include these four keys at the top level.
 | `projectName` | string | Human-readable project name. |
 | `paths` | object | Directory paths for each entity type. See the `paths` section below. |
 
+One additional optional top-level field is available.
+
+| Field | Type | Description |
+|---|---|---|
+| `requires` | string | Minimum `rk` version required to load this config. When set, `rk` exits with a `CONFIG_REQUIRES_NOT_MET` finding if the running binary is older than this value. |
+
 ## `paths`
 
-All path values must be repo-relative. Absolute paths, `..` segments, and NUL bytes are rejected as `CONFIG_INVALID`. Every key except `decisions` is required.
+All path values must be repo-relative. Absolute paths, `..` segments, and NUL bytes are rejected as `CONFIG_INVALID`. Every key except `decisions` and `next` is required.
 
 | Key | Required | Default | Purpose |
 |---|---|---|---|
@@ -35,6 +41,7 @@ All path values must be repo-relative. Absolute paths, `..` segments, and NUL by
 | `generated` | yes | `.repokernel` | Root directory for generated artifacts |
 | `registry` | yes | `.repokernel/registry.json` | Path where the registry file is written |
 | `decisions` | no | `.repokernel/plan/decisions` | Reserved for future ADR validation |
+| `next` | no | omitted | Path to the `NEXT.md` slot file, when the NEXT.md slot system is in use. |
 
 ## `policies`
 
@@ -57,6 +64,14 @@ All fields are optional. Defaults are applied when omitted.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `requireCleanWorkingTreeForClose` | boolean | `true` | `rk close` refuses dirty worktrees. |
+
+## `generated`
+
+Tracks files whose content is fully derived from planning state. Reserved for future drift detection.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `files` | string[] | `[]` | List of repo-relative paths whose drift is tracked. Reserved for future use. |
 
 ## `worktrees`
 
@@ -146,6 +161,14 @@ automation:
   allowAutonomousClose: false
 ```
 
+## `review`
+
+Controls automated review-creation behavior.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `auto.when` | `gates_green`\|`never` | `never` | When `rk` automatically creates a review stub after gates pass. `gates_green` creates a stub when all sprint gates are green. `never` disables automatic review creation. |
+
 ## `parallel`
 
 | Field | Type | Default | Description |
@@ -224,6 +247,40 @@ agents:
       - "{worktree}"
     resultFormat: sentinel-json
     timeoutSeconds: 1800
+```
+
+## `routing`
+
+Cost-aware agent routing rules. Tiers are opaque names ordered cheap → expensive; the consuming skill or local config maps tier names to concrete model IDs. Rules are evaluated in order and the first match wins.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `tiers` | string[] | `["light","standard","heavy"]` | Ordered list of tier names from cheapest to most expensive. Must be unique, between 2 and 8 entries. |
+| `rules` | object[] | `[]` | Up to 16 routing rules. Each rule has an `id`, a `when` predicate map, and a `then` object specifying `tier` and optional `fanout`. |
+
+Each rule object:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | yes | Lowercase identifier matching `[a-z][a-z0-9_-]*`, max 60 chars. Must be unique within the rules array. |
+| `when` | object | yes | Flat map of signal-to-value predicates. Supported signals: `profile`, `est_tokens`, `allowed_paths_count`, `depends_on_count`, `ac_count`, `review_required`, `gate`, `lane`, `extras_complexity`. Operator suffixes `_lt`, `_lte`, `_gt`, `_gte` are supported; bare key means equality. |
+| `then.tier` | string | yes | Target tier name. Must exist in `routing.tiers`. |
+| `then.fanout` | object[] | no | Up to 8 sub-task entries, each with `id` and `tier`. |
+
+```yaml
+routing:
+  tiers: [light, standard, heavy]
+  rules:
+    - id: large-sprint
+      when:
+        est_tokens_gt: 8000
+      then:
+        tier: heavy
+    - id: review-lane
+      when:
+        lane: review
+      then:
+        tier: standard
 ```
 
 ## Complete example

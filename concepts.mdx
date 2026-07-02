@@ -48,11 +48,13 @@ allowed_paths:
 
 Every sprint moves through a defined set of states. Transitions are recorded — no state change is silent.
 
-```
+```text
 planned → queued → active → review → shipped
                                    ↘ reopened → active
                          → cancelled
 ```
+
+The full set of canonical sprint statuses is: `planned`, `pending`, `queued`, `active`, `review`, `shipped`, `reopened`, `cancelled`. The `pending` status is used for sprints that are parked outside the normal queue flow — for example, sprints imported from a tracker that are not yet ready to enqueue. `pending` sprints require `--force` to add to a queue.
 
 Each transition captures metadata:
 
@@ -150,7 +152,7 @@ findings: []
 ---
 ```
 
-Verdict options: `pending`, `accepted`, `changes_requested`, `rejected`.
+Reviews start with verdict `pending`. The three settable verdicts are `accepted`, `changes_requested`, and `rejected`.
 
 A sprint cannot close to `shipped` if its review verdict is not `accepted`, unless `review_required: false` is set on the sprint. Set the verdict with:
 

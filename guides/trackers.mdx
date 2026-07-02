@@ -115,7 +115,7 @@ rk tracker comment S-042 "Agent finished — review pending"
 # Link a PR to the ticket (native link on gh; comment on Linear/Jira)
 rk tracker link-pr S-042 https://github.com/owner/repo/pull/456
 
-# Transition the ticket (gh: close/reopen; linear/jira: not yet implemented)
+# Transition the ticket (gh: close/reopen; linear/jira: not_implemented)
 rk tracker transition S-042 closed
 ```
 
@@ -138,8 +138,8 @@ extras:
 | Adapter | `link` | `comment` | `link-pr` | `transition` |
 |---|---|---|---|---|
 | `gh` | ✓ | ✓ via `gh issue comment` | ✓ as comment | ✓ via `gh issue close/reopen` |
-| `linear` | ✓ | not yet | not yet | not yet |
-| `jira` | ✓ | not yet | not yet | not yet |
+| `linear` | ✓ | not_implemented | not_implemented | not_implemented |
+| `jira` | ✓ | not_implemented | not_implemented | not_implemented |
 
 Linear and Jira write APIs ship in a follow-up release. The dispatch layer is already provider-aware — adapters that don't implement an operation return `{ ok: false, reason: 'not_implemented' }` cleanly without failing the call.
 

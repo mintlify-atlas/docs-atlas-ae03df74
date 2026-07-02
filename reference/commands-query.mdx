@@ -161,6 +161,7 @@ rk team status [--json] [--watch] [--sprint <id>]
 
 | Flag | Description |
 |---|---|
+| `--json` | Machine-stable JSON output |
 | `--watch` | Continuously refresh the output (live dashboard mode) |
 | `--sprint <id>` | Scope the view to a specific sprint |
 
@@ -233,12 +234,86 @@ When `--from-tracker` succeeds, the positional title is replaced with the tracke
 
 ---
 
-## `rk audit-trail`
+## `rk audit-trail <epic-id>`
 
-Show the complete audit trail of mutations for the project.
+Show every sprint in an epic with its `base_sha`/`end_sha`, reviewer, verdict, and file count. Useful for compliance review or understanding how an epic progressed through to completion.
 
 ```bash
-rk audit-trail [--cwd <path>] [--json]
+rk audit-trail E-001 [--json] [--cwd <path>]
 ```
 
-The audit trail records every journaled mutation in the order it was applied, including the command that triggered it, the entities affected, and the before/after state. Use it for compliance review or to understand how a project reached its current state.
+| Flag | Description |
+|---|---|
+| `--json` | Machine-stable JSON output |
+
+---
+
+## `rk brief <id>`
+
+Render a markdown action-brief for a sprint or epic. Auto-detects the relevant gate (pause, review-fail, blocked, ready-to-close, or status) and formats accordingly.
+
+```bash
+rk brief S-001 [--gate <type>] [--for-agent] [--json] [--cwd <path>]
+rk brief E-001
+```
+
+| Flag | Description |
+|---|---|
+| `--gate <type>` | Force a specific gate template: `review-fail`, `ready-to-close`, `pause`, `blocked`, or `status` |
+| `--for-agent` | Include execution constraints for sprint agents |
+| `--json` | Emit a JSON envelope including the rendered markdown |
+
+---
+
+## `rk board`
+
+Show a kanban board across sprint statuses.
+
+```bash
+rk board [--epic <id>] [--lane <lane>] [--show-cancelled] [--json] [--cwd <path>]
+```
+
+| Flag | Description |
+|---|---|
+| `--epic <id>` | Filter by epic ID |
+| `--lane <lane>` | Filter by lane name |
+| `--show-cancelled` | Include a cancelled sprints column |
+| `--json` | Machine-stable JSON output |
+
+---
+
+## `rk blockers <sprint-id>`
+
+Report durable blockers for a sprint — unmet dependencies, failed gates, and other conditions that prevent the sprint from being started or closed.
+
+```bash
+rk blockers S-001 [--json] [--cwd <path>]
+```
+
+| Flag | Description |
+|---|---|
+| `--json` | Machine-stable JSON output |
+
+---
+
+## `rk context [target]`
+
+Compile a deterministic context packet for a sprint or epic. Used by agent adapters to build focused, token-budgeted prompts from project state.
+
+```bash
+rk context S-001 [--profile implement|review|wave] [--format md|json]
+                 [--budget <tokens>] [--check] [--validate] [--with-routing]
+                 [--cwd <path>]
+rk context E-001
+```
+
+| Flag | Description |
+|---|---|
+| `--profile <profile>` | Context profile: `implement`, `review`, or `wave`. Defaults: `S-NNN` → `implement`, `E-NNN` → `wave` |
+| `--format <format>` | Output format: `md` (default) or `json` |
+| `--budget <tokens>` | Override the profile's token budget (positive integer) |
+| `--check` | Exit non-zero if the rendered packet exceeds the effective budget |
+| `--validate` | Run full validators (default uses parse findings only) |
+| `--with-routing` | Embed a `routing_hint` (recommended tier + signals) in the packet |
+
+Exit `3` (`EXIT_BUDGET_EXCEEDED`) when the packet exceeds budget and `--check` is set. Exit `4` (`EXIT_BUDGET_TOO_SMALL`) when the budget is smaller than the essential capsule.

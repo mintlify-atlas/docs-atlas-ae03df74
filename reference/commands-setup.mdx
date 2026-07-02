@@ -98,16 +98,31 @@ After `--apply`, a structured report is written to `<opRoot>/recover.report.json
 Install the RepoKernel agent skill into a supported IDE or agent tool.
 
 ```bash
-rk install-skill
-rk install-skill --ide cursor
+rk install-skill [--ide <name>] [--project] [--target <path>] [--source <path>]
+                 [--dry-run] [--force] [--print-path]
+```
+
+| Flag | Description |
+|---|---|
+| `--ide <name>` | Install into a specific IDE: `cursor`, `windsurf`, `copilot`, `gemini`, or `opencode` |
+| `--project` | Scope the install to the current repository rather than the user's global config (IDE adapters only) |
+| `--target <path>` | Override the install target directory (default: `~/.claude`) |
+| `--source <path>` | Override the plugin source path (default: bundled with this CLI) |
+| `--dry-run` | Preview changes without writing any files |
+| `--force` | Overwrite an existing divergent install |
+| `--print-path` | Print the resolved plugin cache destination and exit |
+
+Omitting `--ide` installs the skill globally for the default detected environment. Examples:
+
+```bash
+rk install-skill                           # global default install
+rk install-skill --ide cursor              # Cursor global
+rk install-skill --ide cursor --project    # Cursor project-scoped
 rk install-skill --ide windsurf
 rk install-skill --ide copilot
 rk install-skill --ide gemini
 rk install-skill --ide opencode
-rk install-skill --ide cursor --project   # project-scoped install
 ```
-
-Omitting `--ide` installs the skill globally for the default detected environment. The `--project` flag scopes the install to the current repository rather than the user's global config.
 
 ---
 

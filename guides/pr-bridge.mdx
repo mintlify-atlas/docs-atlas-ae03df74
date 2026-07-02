@@ -39,7 +39,7 @@ Persist a PR URL under sprint frontmatter `extras.pr`. Provider is inferred from
 | `bitbucket.org` / `*.bitbucket.org` | `bitbucket` |
 | anything else | rejected with `unsupported PR host '<hostname>'` |
 
-Self-hosted GitHub Enterprise and GitLab CE URLs are intentionally rejected. RepoKernel returns `unknown` for non-public hosts rather than silently miscategorizing them, so self-hosted URLs can never be treated as GitHub when they aren't.
+Self-hosted GitHub Enterprise and GitLab CE URLs are intentionally rejected — `rk pr link` errors loudly on unrecognised hosts rather than silently miscategorizing them. Provider inference returns an explicit `unknown` internally for non-public hosts, which causes the command to reject them so self-hosted URLs can never be treated as GitHub when they aren't.
 
 The metadata shape stored on the sprint:
 

@@ -84,7 +84,7 @@ The run loop groups sprints into dependency waves:
 
 Within each wave, sprints with non-overlapping `allowed_paths` run concurrently. The parallel-epic example has two waves:
 
-```
+```text
 Wave 1: S-001 + S-002   (no dependencies — run concurrently)
 Wave 2: S-003 + S-004   (depend on S-001 and S-002 respectively)
 ```
@@ -145,18 +145,7 @@ parallel:
   conflictStrategy: block
 ```
 
-For production workloads, you can add per-state caps:
-
-```yaml
-parallel:
-  maxConcurrentSprints: 6
-  maxConcurrentSprintsByState:
-    review: 1
-    active: 6
-    pending: 2
-```
-
-`maxConcurrentSprintsByState.review: 1` is a deliberate bottleneck — reviews require human attention and piling them up creates a backlog. Tune `active` to match your agent budget and machine capacity.
+`maxConcurrentSprints` is a hard upper bound on how many sprints may run within a single wave. Set it to match your agent budget and machine capacity. To temporarily cap concurrency for a single invocation without changing config, use `--concurrency N` on the command line.
 
 ## What happens during a wave
 

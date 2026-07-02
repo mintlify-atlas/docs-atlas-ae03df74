@@ -192,17 +192,16 @@ rk ls sprints                # all sprints
 rk ls sprints --json         # structured JSON under the "sprints" key
 rk inspect E-001             # epic details: status, sprints, timestamps
 rk inspect S-001             # sprint details: status, epic, lane, dependencies, path policy
-rk epic status E-001         # shipped / in-review / queued / blocked in five lines
 ```
 
-`rk epic status E-001` is especially useful at the start of a fresh agent session — it gives a concise summary without re-reading full sprint tables.
+`rk inspect E-001` is especially useful at the start of a fresh agent session — it gives a concise summary of the epic's status, sprints, and timestamps without re-reading full sprint tables.
 
 ## Epic status and reporting
 
 Check the state of a running epic:
 
 ```bash
-rk epic status E-001
+rk inspect E-001
 ```
 
 For a full project snapshot including findings, next sprint, and sprint groups by status:

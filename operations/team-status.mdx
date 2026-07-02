@@ -1,5 +1,5 @@
 ---
-title: "Monitor Multi-Agent Fleet Status in Real Time"
+title: "Track Multi-Agent Fleet Status with rk team status"
 sidebarTitle: "Team Status"
 description: "Use rk team status to see every active run, sprint, registry health, and bottlenecks across all agents in a single terminal snapshot."
 ---
@@ -69,7 +69,7 @@ The **Bottlenecks** section lists conditions that are actively blocking forward 
 ```bash
 rk team status                        # human-friendly dashboard
 rk team status --json                 # machine-readable; pipe into anything
-rk team status --watch                # refresh every 15s minimum, SIGINT-safe
+rk team status --watch                # refresh every 30s (15s minimum floor), SIGINT-safe
 rk team status --watch --interval 60  # custom refresh interval (seconds)
 rk team status --sprint S-042         # drill into a single sprint
 ```
@@ -136,22 +136,6 @@ Beyond `rk team status`, RepoKernel ships several commands for per-entity inspec
 rk report          # headline, next sprint, sprint groups, findings
 rk report --all    # include shipped/done sprints and the full epic table
 rk report --json   # full structured report for machine consumption
-```
-
-### rk board
-
-`rk board` renders a Kanban-style view of all sprints, grouped by status column.
-
-```bash
-rk board
-```
-
-### rk blockers
-
-`rk blockers` lists every sprint blocked by an unmet dependency, along with the dependency that is holding it back.
-
-```bash
-rk blockers
 ```
 
 ### Per-entity list commands

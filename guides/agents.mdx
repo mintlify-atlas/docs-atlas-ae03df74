@@ -1,5 +1,5 @@
 ---
-title: "Configure AI Agent Adapters: Claude, Codex, Ollama, and Custom"
+title: "AI Agent Adapters: Claude, Codex, Ollama, and Custom"
 sidebarTitle: "Agents"
 description: "Set up and configure RepoKernel's built-in agent adapters — Claude Code, OpenAI Codex, Ollama, fake, and custom shell commands via config."
 ---
@@ -63,13 +63,13 @@ RepoKernel is agent-agnostic. Every task and sprint runs inside an isolated Git 
 
     RepoKernel calls the Claude CLI in non-interactive mode, scoped to the sprint worktree:
 
-    ```
+    ```text
     claude --print --cwd <worktree> -p <packet_path>
     ```
 
     Claude Code reads the packet, edits files, runs any checks you configured, and commits its changes inside the worktree. Each commit lands on the sprint branch:
 
-    ```
+    ```text
     feat(S-001): add /health endpoint returning 200 OK
     ```
 
@@ -77,7 +77,7 @@ RepoKernel is agent-agnostic. Every task and sprint runs inside an isolated Git 
 
     **Auth not configured**
 
-    ```
+    ```text
     Error: No API key found. Run `claude login` or set ANTHROPIC_API_KEY.
     ```
 
@@ -105,7 +105,7 @@ RepoKernel is agent-agnostic. Every task and sprint runs inside an isolated Git 
 
     If Claude Code declines to write a file outside `allowed_paths`, or the review gate catches out-of-scope changes before `rk close` will merge:
 
-    ```
+    ```text
     Review blocked: changed files outside allowed_paths.
     ```
 
@@ -151,7 +151,7 @@ RepoKernel is agent-agnostic. Every task and sprint runs inside an isolated Git 
 
     The default `codex` preset confines writes to the worktree and disables network access:
 
-    ```
+    ```text
     codex exec --cd <worktree> --sandbox workspace-write \
       "Read and follow the RepoKernel sprint packet at <packet_path>. Emit the required RepoKernel sentinel block when complete."
     ```
@@ -168,7 +168,7 @@ RepoKernel is agent-agnostic. Every task and sprint runs inside an isolated Git 
 
     **API key not set**
 
-    ```
+    ```text
     Error: OPENAI_API_KEY is not set.
     ```
 
@@ -184,7 +184,7 @@ RepoKernel is agent-agnostic. Every task and sprint runs inside an isolated Git 
 
     **Scope violation**
 
-    ```
+    ```text
     Review blocked: changed files outside allowed_paths.
     ```
 
@@ -237,15 +237,14 @@ RepoKernel is agent-agnostic. Every task and sprint runs inside an isolated Git 
     Register any shell command or script as a named agent in `repokernel.config.yaml`:
 
     ```yaml
-    automation:
-      agents:
-        my-agent:
-          command: ./scripts/run-agent.sh
-          args:
-            - "{packet_path}"
-            - "{worktree}"
-          resultFormat: sentinel-json
-          timeoutSeconds: 1800
+    agents:
+      my-agent:
+        command: ./scripts/run-agent.sh
+        args:
+          - "{packet_path}"
+          - "{worktree}"
+        resultFormat: sentinel-json
+        timeoutSeconds: 1800
     ```
 
     Then invoke it by name:
@@ -273,7 +272,7 @@ RepoKernel is agent-agnostic. Every task and sprint runs inside an isolated Git 
 
     Every agent — custom or built-in — must write the following to stdout before exiting:
 
-    ```
+    ```text
     REPOKERNEL_RESULT_START
     {"status":"completed","summary":"Added JWT signing module","changed_files":["src/auth/jwt.ts"],"needs_human":false}
     REPOKERNEL_RESULT_END

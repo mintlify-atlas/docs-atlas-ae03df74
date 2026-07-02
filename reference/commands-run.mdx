@@ -52,12 +52,12 @@ The `--from-tracker` flag seeds the task title and body from an external issue (
 List all run records for the project, with optional filtering.
 
 ```bash
-rk runs [--status running|paused|completed|failed] [--epic <epic-id>] [--json] [--cwd <path>]
+rk runs [--status running|paused|completed|failed|aborted] [--epic <epic-id>] [--json] [--cwd <path>]
 ```
 
 | Flag | Description |
 |---|---|
-| `--status` | Filter to runs in a specific state: `running`, `paused`, `completed`, or `failed` |
+| `--status` | Filter to runs in a specific state: `running`, `paused`, `completed`, `failed`, or `aborted` |
 | `--epic <epic-id>` | Show only runs associated with the given epic |
 | `--json` | Machine-stable JSON output |
 
@@ -68,7 +68,7 @@ rk runs [--status running|paused|completed|failed] [--epic <epic-id>] [--json] [
 Show the full state of a run and its next steps.
 
 ```bash
-rk run inspect RUN-001 [--cwd <path>]
+rk run inspect RUN-001 [--json] [--cwd <path>]
 ```
 
 Useful for understanding why a run is paused — the output includes the current sprint, the pending review or gate, and the exact command to make progress.

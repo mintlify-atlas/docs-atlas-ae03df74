@@ -1,7 +1,7 @@
 ---
 title: "CLI Exit Codes for Scripting and Agent Shell Integration"
 sidebarTitle: "Exit Codes"
-description: "RepoKernel exit codes — 0 for success, 1 for findings, 2 for runtime errors, 3-4 for context budget, 64 for usage errors. Guidance for agent shell disambiguation."
+description: "RepoKernel exit codes — 0 success, 1 findings or blocked, 2 runtime error, 3–4 context budget, 64 bad invocation. Scripting and agent shell guidance."
 ---
 
 Every `rk` command exits with a numeric code that tells the calling shell or agent whether the run succeeded, whether the project has findings that need attention, or whether something went wrong at the tool or environment level. Understanding the distinction between these codes is essential for writing robust CI scripts and agent loops.

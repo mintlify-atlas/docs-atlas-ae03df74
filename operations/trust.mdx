@@ -190,7 +190,7 @@ rk reject \
 ```
 
 - `--pattern` is compiled as a JavaScript regex and matched against incoming sprint titles and task descriptions.
-- `--scope` categorizes the rejection (e.g. `feature`, `enhancement`, `refactor`).
+- `--scope` categorizes the rejection: `feature`, `bug`, or `enhancement`.
 - `--ref` attaches an external reference (issue, PR, or ticket URL).
 - `--close` attempts a tracker comment and close transition on the referenced item.
 - Duplicate `(pattern, scope)` writes are idempotent — re-running the same rejection does not create duplicate ADR entries.

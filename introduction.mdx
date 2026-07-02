@@ -1,7 +1,7 @@
 ---
-title: "RepoKernel: Run AI Agents with Git Safety Rails"
+title: "RepoKernel: AI Agents with Git Worktrees and Review Gates"
 sidebarTitle: "Introduction"
-description: "RepoKernel orchestrates AI coding agents in isolated Git worktrees with scope enforcement, dependency ordering, and review gates before merge. No daemon, no cloud."
+description: "RepoKernel runs AI coding agents in isolated Git worktrees with scope enforcement, dependency ordering, and review gates before merge. No daemon, no cloud."
 ---
 
 RepoKernel is a CLI tool that makes AI coding agent work **scoped, ordered, reviewed, and resumable**. Every task runs in its own Git worktree, locked to declared paths, sequenced by dependencies, and gated by review before anything touches `main`. It ships no daemon, no database, and no cloud service — your repository is the source of truth, and `git push` is the deployment.
